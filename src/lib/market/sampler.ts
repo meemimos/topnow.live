@@ -2,15 +2,16 @@ import type { AskSample } from "@prisma/client";
 
 import { getDb } from "@/lib/db";
 import {
-  BASE_MULTIPLIER_CM,
   SLOTS,
   askHrCents,
   baseHrCents,
-  decayOneHour,
+  decayOver,
   surgeFromQueuedHours,
   type Slot,
 } from "@/lib/pricing";
 import { promoteAll } from "@/lib/purchase/state";
+
+import { latestSampledAsk } from "./ask";
 
 /**
  * The hourly job (#22).
@@ -60,7 +61,7 @@ async function queuedHoursBySlot(): Promise<Map<Slot, number>> {
 }
 
 /**
- * The multiplier a slot carries into this hour.
+ * The multiplier a slot carries into `hour`.
  *
  * The ask has memory: it jumps up with demand immediately and bleeds 5% of its
  * distance above base per unsold hour. Without that, decay would never fire —
@@ -69,17 +70,26 @@ async function queuedHoursBySlot(): Promise<Map<Slot, number>> {
  *
  * The memory is the previous *sample*, not a mutable column, so the series is
  * reconstructible and a missed hour cannot corrupt the next one.
+ *
+ * Decay is applied for every hour actually elapsed since that sample, not for
+ * one hour. Applying a single hour would let an outage freeze the ask near its
+ * peak: come back after eight hours down and the slot would still be asking
+ * within 5% of what it charged when it was busy.
  */
-export async function multiplierForHour(slot: Slot, queuedHours: number): Promise<number> {
-  const previous = await getDb().askSample.findFirst({
-    where: { slot },
-    orderBy: { hour: "desc" },
-  });
-
+export async function multiplierForHour(
+  slot: Slot,
+  queuedHours: number,
+  hour: Date,
+): Promise<number> {
+  const previous = await latestSampledAsk(getDb(), slot);
   if (!previous) return surgeFromQueuedHours(queuedHours);
 
-  const previousCm = Math.round((previous.askHrCents * BASE_MULTIPLIER_CM) / previous.baseHrCents);
-  return decayOneHour(previousCm, queuedHours);
+  const hoursElapsed = Math.max(
+    0,
+    Math.round((hour.getTime() - previous.hour.getTime()) / MS_PER_HOUR),
+  );
+
+  return decayOver(previous.multiplierCm, hoursElapsed, queuedHours);
 }
 
 export type SampleResult = {
@@ -109,7 +119,7 @@ export async function sampleAsks(now: Date = new Date()): Promise<SampleResult> 
 
   for (const slot of SLOTS) {
     const queuedHours = queued.get(slot) ?? 0;
-    const multiplierCm = await multiplierForHour(slot, queuedHours);
+    const multiplierCm = await multiplierForHour(slot, queuedHours, hour);
 
     try {
       written.push(

@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 
 import { getDb } from "@/lib/db";
+import { latestSampledAsk } from "@/lib/market/ask";
 import {
   QUEUE_CAP_HOURS,
   type DurationHours,
@@ -52,6 +53,7 @@ const SERIALIZATION_FAILURE = "40001";
 const DEADLOCK_DETECTED = "40P01";
 
 const MAX_SERIALIZATION_RETRIES = 5;
+const RETRY_BASE_DELAY_MS = 10;
 
 export class QueueAtCapacityError extends Error {
   constructor(
@@ -80,8 +82,16 @@ export type SlotCapacity = {
   remainingHours: number;
   /** Every duration, or none — the cap is on the wait, not on the booking. */
   availableDurations: DurationHours[];
-  /** Surge implied by the current queue, in hundredths. */
+  /**
+   * The ask a buyer is quoted right now, in hundredths.
+   *
+   * The higher of what the queue justifies and what the slot's ask has decayed
+   * to since its last peak — demand lifts the ask immediately, only time brings
+   * it down.
+   */
   multiplierCm: number;
+  /** What the queue alone justifies, before decay is considered. */
+  surgeFromQueueCm: number;
   atCapacity: boolean;
 };
 
@@ -156,12 +166,17 @@ export async function slotCapacity(
   durations: readonly DurationHours[],
   now: Date = new Date(),
 ): Promise<SlotCapacity> {
-  const [live, queuedHours] = await Promise.all([
+  const [live, queuedHours, sampled] = await Promise.all([
     liveRemainingHours(client, slot, now),
     queuedHoursForSlot(client, slot),
+    latestSampledAsk(client, slot),
   ]);
   const waitHours = live + queuedHours;
   const open = acceptsNewBookings(waitHours);
+
+  // Surge prices demand, which is what is queued — not the tail of a rental
+  // already paid for.
+  const surgeFromQueueCm = surgeFromQueuedHours(queuedHours);
 
   return {
     slot,
@@ -170,9 +185,11 @@ export async function slotCapacity(
     waitHours,
     remainingHours: remainingCapacityHours(waitHours),
     availableDurations: open ? [...durations] : [],
-    // Surge prices demand, which is what is queued — not the tail of a rental
-    // already paid for.
-    multiplierCm: surgeFromQueuedHours(queuedHours),
+    // A slot that surged and is still bleeding back toward base quotes the
+    // decayed ask, not base. Without this the engine's decay would move the
+    // chart while never affecting a price anybody pays.
+    multiplierCm: Math.max(surgeFromQueueCm, sampled?.multiplierCm ?? 0),
+    surgeFromQueueCm,
     atCapacity: !open,
   };
 }
@@ -201,6 +218,10 @@ function isRetryableConflict(error: unknown): boolean {
  *
  * The cost is that a losing transaction must be retried, which is safe here
  * because the retry re-reads the queue and re-checks the cap.
+ *
+ * Retries back off with jitter. Retrying immediately means every transaction
+ * that just collided collides again in lockstep, which turns a recoverable
+ * conflict into a failure on a path that takes money.
  */
 export async function inSerializableTransaction<T>(
   work: (tx: Prisma.TransactionClient) => Promise<T>,
@@ -216,10 +237,21 @@ export async function inSerializableTransaction<T>(
     } catch (error) {
       if (!isRetryableConflict(error)) throw error;
       lastError = error;
+
+      if (attempt < MAX_SERIALIZATION_RETRIES - 1) {
+        const backoffMs = RETRY_BASE_DELAY_MS * 2 ** attempt;
+        // Full jitter: without it the losers of one collision retry together and
+        // collide again in the same order.
+        await sleep(Math.random() * backoffMs);
+      }
     }
   }
 
   throw lastError;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export type NewPurchase = {

@@ -1,9 +1,10 @@
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getDb } from "@/lib/db";
 import { quoteForQueue, type DurationHours, type Slot } from "@/lib/pricing";
 
 import {
+  NotKillableError,
   currentBoard,
   killPurchase,
   liveOnSlot,
@@ -281,6 +282,65 @@ describe("derived views", () => {
   });
 });
 
+describe("promotion is independent of clock skew", () => {
+  /**
+   * boughtAt is stamped by the database while `now` comes from the application
+   * clock. If the app server runs behind the database, a rental promoted moments
+   * after purchase would start before it was bought and
+   * purchase_starts_after_bought (#21) would reject the promotion outright.
+   */
+  it("never starts a rental before it was bought", async () => {
+    // Row bought at NOW, promoted with an application clock a minute behind.
+    await db.purchase.create({ data: row({ slot: 1, handle: "just_bought", boughtAt: NOW }) });
+
+    const skewedNow = new Date(NOW.getTime() - 60_000);
+    const promoted = await promoteSlot(1, skewedNow);
+
+    expect(promoted).not.toBeNull();
+    expect(promoted!.startsAt!.getTime()).toBeGreaterThanOrEqual(NOW.getTime());
+    expect(promoted!.endsAt!.getTime()).toBe(
+      promoted!.startsAt!.getTime() + promoted!.durationH * HOUR,
+    );
+  });
+
+  it("uses the application clock when it is ahead of the purchase", async () => {
+    await queue(1, 3, 30, "bought_earlier");
+    const promoted = await promoteSlot(1, NOW);
+    expect(promoted!.startsAt).toEqual(NOW);
+  });
+});
+
+describe("the board survives a failed promotion", () => {
+  /**
+   * The read consults only the window, so it is correct whether or not promotion
+   * succeeded. Failing the whole board read over a contended write would take
+   * the site down for something #22's job redoes within the hour.
+   */
+  it("still serves the board when promotion throws", async () => {
+    await live(1, 6, new Date(NOW.getTime() - 2 * HOUR), "running");
+
+    const state = await import("./state");
+    const queueModule = await import("./queue");
+    const original = queueModule.inSerializableTransaction;
+
+    // Force every promotion attempt to fail the way an exhausted retry budget does.
+    const spy = vi
+      .spyOn(queueModule, "inSerializableTransaction")
+      .mockRejectedValue(new Error("could not serialize access"));
+
+    try {
+      await db.purchase.create({ data: row({ slot: 2, handle: "waiting", boughtAt: NOW }) });
+      const board = await state.currentBoard(NOW);
+
+      expect(board.find((s) => s.slot === 1)?.live?.handle).toBe("running");
+      expect(board.find((s) => s.slot === 2)?.live).toBeNull();
+    } finally {
+      spy.mockRestore();
+      expect(queueModule.inSerializableTransaction).toBe(original);
+    }
+  });
+});
+
 describe("killing a listing (#17)", () => {
   it("frees a live slot and promotes the next in line in one transaction", async () => {
     const running = await live(1, 6, new Date(NOW.getTime() - HOUR), "impersonator");
@@ -300,6 +360,42 @@ describe("killing a listing (#17)", () => {
 
     const stored = await db.purchase.findUniqueOrThrow({ where: { id: running.id } });
     expect(stored.status).toBe("killed");
+    expect(stored.killedReason).toBe("impersonation");
+  });
+
+  // The tape is a record and does not get rewritten. Killing an ended rental
+  // would quietly remove it from the tape, since the tape filters on `ended`.
+  it("refuses to kill a rental that has already ended", async () => {
+    const boughtAt = new Date(NOW.getTime() - 11 * HOUR);
+    const startsAt = new Date(NOW.getTime() - 10 * HOUR);
+    const ended = await db.purchase.create({
+      data: row({
+        slot: 2,
+        handle: "finished",
+        status: "ended" as const,
+        boughtAt,
+        startsAt,
+        endsAt: new Date(startsAt.getTime() + 3 * HOUR),
+      }),
+    });
+
+    await expect(killPurchase(ended.id, "too late", NOW)).rejects.toThrow(NotKillableError);
+    expect((await tape()).map((r) => r.handle)).toContain("finished");
+  });
+
+  // A double click would otherwise overwrite the audit trail's timestamp and
+  // reason with the second attempt's.
+  it("refuses to kill the same listing twice", async () => {
+    const running = await live(1, 6, new Date(NOW.getTime() - HOUR), "impersonator");
+    await killPurchase(running.id, "impersonation", NOW);
+
+    const later = new Date(NOW.getTime() + 60_000);
+    await expect(killPurchase(running.id, "changed my mind", later)).rejects.toThrow(
+      NotKillableError,
+    );
+
+    const stored = await db.purchase.findUniqueOrThrow({ where: { id: running.id } });
+    expect(stored.killedAt).toEqual(NOW);
     expect(stored.killedReason).toBe("impersonation");
   });
 

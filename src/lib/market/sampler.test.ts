@@ -205,6 +205,50 @@ describe("decay", () => {
   });
 });
 
+describe("decay spans the whole gap, not one hour", () => {
+  /**
+   * Applying a single hour of decay however long the job was down would let an
+   * outage freeze the ask near its peak: come back after eight hours and the
+   * slot is still asking within 5% of what it charged when it was busy.
+   */
+  it("decays for every hour actually elapsed since the last sample", async () => {
+    for (let i = 0; i < 8; i += 1) {
+      await db.purchase.create({
+        data: row({
+          slot: 1,
+          durationH: 3,
+          handle: `q${i}`,
+          boughtAt: new Date(NOW.getTime() - i),
+        }),
+      });
+    }
+    await sampleAsks(NOW);
+    expect((await db.askSample.findFirstOrThrow({ where: { slot: 1 } })).askHrCents).toBe(1000);
+
+    await db.purchase.deleteMany({ where: { status: "queued" } });
+
+    // The job is down for eight hours, then runs.
+    await sampleAsks(new Date(NOW.getTime() + 8 * HOUR));
+
+    const resumed = await db.askSample.findFirstOrThrow({
+      where: { slot: 1 },
+      orderBy: { hour: "desc" },
+    });
+
+    // Eight hours of 0.95 compounding: 2.00x down to 1.64x, $8.20/hr.
+    expect(resumed.askHrCents).toBe(820);
+    // One hour of decay would have left it at 1.95x — $9.75, barely off the peak.
+    expect(resumed.askHrCents).toBeLessThan(975);
+  });
+
+  it("applies no decay when the sample is for the same hour it last ran", async () => {
+    await sampleAsks(NOW);
+    const before = await db.askSample.count();
+    await sampleAsks(new Date(NOW.getTime() + 10 * 60_000));
+    expect(await db.askSample.count()).toBe(before);
+  });
+});
+
 describe("gaps stay gaps", () => {
   /**
    * Never interpolate, never pad. An hour with no sample is an hour with no

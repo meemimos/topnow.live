@@ -1,4 +1,4 @@
-import { Prisma, type Purchase } from "@prisma/client";
+import { Prisma, type Purchase, type PurchaseStatus } from "@prisma/client";
 
 import { getDb } from "@/lib/db";
 import { SLOTS, type Slot } from "@/lib/pricing";
@@ -93,7 +93,12 @@ async function promoteWithin(
   });
   if (!next) return null;
 
-  const startsAt = now;
+  // boughtAt is stamped by the database (CURRENT_TIMESTAMP) while `now` comes
+  // from the application clock. If the app server runs even slightly behind the
+  // database, a rental promoted moments after purchase would start before it was
+  // bought, and purchase_starts_after_bought (#21) would reject the update. The
+  // clamp makes promotion independent of skew between the two clocks.
+  const startsAt = now > next.boughtAt ? now : next.boughtAt;
   const endsAt = new Date(startsAt.getTime() + next.durationH * 3_600_000);
 
   // Guarded on `status: "queued"` so that if another transaction promoted this
@@ -179,7 +184,16 @@ export type BoardSlot = {
  * queue behind it would sit unpromoted until something else ran.
  */
 export async function currentBoard(now: Date = new Date()): Promise<BoardSlot[]> {
-  await promoteAll(now);
+  // Promotion is an optimisation on this path, not a precondition: the read
+  // below consults only the window, so it is correct whether or not this
+  // succeeded. Under heavy contention a serialisable transaction can exhaust its
+  // retry budget, and failing the whole board read for that would take the site
+  // down over a write that #22's job will redo within the hour.
+  try {
+    await promoteAll(now);
+  } catch (error) {
+    console.error("[board] promotion failed; serving the board without it", error);
+  }
 
   const db = getDb();
 
@@ -238,6 +252,16 @@ export async function tape(limit = 50): Promise<Purchase[]> {
  * row stays in the ledger marked killed — the tape is a record and does not get
  * rewritten.
  */
+export class NotKillableError extends Error {
+  constructor(
+    readonly id: string,
+    readonly status: PurchaseStatus,
+  ) {
+    super(`Purchase ${id} is ${status} and cannot be killed.`);
+    this.name = "NotKillableError";
+  }
+}
+
 export async function killPurchase(
   id: string,
   reason: string,
@@ -245,6 +269,14 @@ export async function killPurchase(
 ): Promise<{ killed: Purchase; promoted: Purchase | null }> {
   return inSerializableTransaction(async (tx) => {
     const target = await tx.purchase.findUniqueOrThrow({ where: { id } });
+
+    // Only a listing that is queued or on the board can be taken down. Killing
+    // an ended rental would quietly remove it from the tape — the tape is a
+    // record and does not get rewritten — and killing an already-killed one
+    // would overwrite the audit trail's timestamp and reason on a double click.
+    if (target.status !== "queued" && target.status !== "live") {
+      throw new NotKillableError(id, target.status);
+    }
 
     const killed = await tx.purchase.update({
       where: { id },
