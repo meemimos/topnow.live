@@ -7,6 +7,7 @@ const validServerEnv = {
   NODE_ENV: "test",
   DATABASE_URL: "postgresql://topnow:topnow@127.0.0.1:5432/topnow?schema=public",
   APP_URL: "http://127.0.0.1:3000",
+  CRON_SECRET: "0123456789abcdef0123456789abcdef0123456789abcdef",
 } satisfies Record<string, string | undefined>;
 
 describe("server config", () => {
@@ -35,6 +36,13 @@ describe("server config", () => {
     expect(() =>
       parseServerConfig({ ...validServerEnv, DATABASE_URL: "mysql://localhost/topnow" }),
     ).toThrowError(/postgres/);
+  });
+
+  // #22 authenticates the hourly job with this; a short one is guessable.
+  it("rejects a CRON_SECRET that is too short to be worth having", () => {
+    expect(() => parseServerConfig({ ...validServerEnv, CRON_SECRET: "short" })).toThrowError(
+      /CRON_SECRET/,
+    );
   });
 
   it("rejects a relative APP_URL", () => {
