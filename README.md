@@ -1,2 +1,98 @@
 # topnow.live
-Pay-to-rank leaderboard where the top three slots are rented by the hour, not bought. When the meter runs out, the slot frees up.
+
+Pay-to-rank leaderboard where the top three slots are rented by the hour, not bought.
+When the meter runs out, the slot frees up.
+
+No cumulative bidding. No permanent number one.
+
+---
+
+## Where things are
+
+| Path                   | What it is                                                              |
+| ---------------------- | ----------------------------------------------------------------------- |
+| `TopNow.html`          | The standalone prototype — **binding visual and behavioural reference** |
+| `reference/`           | The prototype's DOM and logic, extracted so they can be read and diffed |
+| `docs/build-prompt.md` | The build brief. Authority for scope and pricing                        |
+| `docs/PLAN.md`         | Phase ordering, dependencies, and the resolved decisions                |
+| `src/`                 | The app                                                                 |
+| `prisma/`              | Schema and migrations                                                   |
+| `e2e/`                 | Playwright specs, run at 360 / 768 / 1280                               |
+
+Work is tracked as [issues](https://github.com/meemimos/topnow.live/issues) — 26 of them,
+grouped into six phases in `docs/PLAN.md`. One issue at a time.
+
+## The one rule that matters
+
+**Never fabricate activity, prices, or counts.** No seeded events, no replayed history to
+fill quiet periods, no synthetic candles, no rounded-up online counts. The credibility of
+the chart, the tape and the surge all rest on the numbers being real.
+
+The prototype's data _is_ fabricated — it is a mockup. Take its layout and its voice, not
+its numbers. See `reference/README.md`.
+
+## Setup
+
+**Prerequisites:** Node 22+, npm 10+, PostgreSQL 16+.
+
+```bash
+# 1. Install
+npm install
+
+# 2. Database
+createdb topnow
+psql -c "CREATE ROLE topnow LOGIN PASSWORD 'topnow' CREATEDB;"
+psql -c "ALTER DATABASE topnow OWNER TO topnow;"
+
+# 3. Environment
+cp .env.example .env.local     # then fill it in
+
+# 4. Run
+npm run dev                    # http://127.0.0.1:3000
+```
+
+`GET /api/health` reports whether the database connection is live.
+
+## Scripts
+
+| Command                           | What it does                       |
+| --------------------------------- | ---------------------------------- |
+| `npm run dev`                     | Development server                 |
+| `npm run build` / `npm start`     | Production build and serve         |
+| `npm run typecheck`               | Route typegen, then `tsc --noEmit` |
+| `npm run lint:eslint`             | ESLint                             |
+| `npm run format` / `format:check` | Prettier                           |
+| `npm test`                        | Unit tests (Vitest)                |
+| `npm run test:e2e`                | End-to-end tests (Playwright)      |
+| `npm run db:migrate`              | Create and apply a migration       |
+| `npm run db:deploy`               | Apply migrations (deploy)          |
+| `npm run db:studio`               | Prisma Studio                      |
+
+CI runs format, lint, typecheck, unit tests, build and e2e on every push and pull request,
+plus a secret scan. All of it must be green to merge.
+
+## Notes for contributors
+
+**Prisma 7** no longer takes a connection URL in `schema.prisma`. The CLI reads it from
+`prisma.config.ts`; the runtime client connects through the driver adapter in `src/lib/db.ts`.
+
+**Playwright browsers.** In the dev container Chromium is preinstalled under
+`/opt/pw-browsers` and `playwright.config.ts` points at it directly. **Do not run
+`playwright install` there.** CI installs its own copy.
+
+**Two lint rules are staged but disabled** in `eslint.config.mjs`, each turned on by the
+issue that makes the codebase able to satisfy it:
+
+- no raw hex colours in components — enabled by [#4](https://github.com/meemimos/topnow.live/issues/4)
+- no bare `process.env` outside the config module — enabled by [#23](https://github.com/meemimos/topnow.live/issues/23)
+
+**The shadcn registry (`ui.shadcn.com`) is unreachable** from this environment's network
+policy, so `npx shadcn add` will fail. `components.json` and `cn()` are configured, and the
+Radix packages the primitives are built on are installed — so primitives can be authored
+directly against Radix, which is what a shadcn component is. See
+[#4](https://github.com/meemimos/topnow.live/issues/4).
+
+## Licence
+
+MIT — see `LICENSE`. Charts by [TradingView](https://www.tradingview.com/lightweight-charts/);
+attribution is a licence requirement, not a courtesy.

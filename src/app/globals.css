@@ -1,0 +1,10 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens are #4. This file deliberately holds no palette: the create-next-app
+ * defaults (Geist, light/dark greys) have been removed rather than left to be
+ * overwritten later, so nothing in the app can accidentally depend on them.
+ *
+ * TopNow has one fixed palette and no dark mode — the teal desktop, the silver
+ * plates and the amber meter are the design, not a light-mode variant of it.
+ */

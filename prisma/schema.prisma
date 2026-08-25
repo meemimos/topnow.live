@@ -1,0 +1,18 @@
+// TopNow schema.
+//
+// The `purchase` model and every constraint that makes the slot state machine
+// safe are owned by #21 — deliberately not defined here. This file exists so
+// the scaffold (#25) can prove a real connection to Postgres before any model
+// is designed.
+//
+// Prisma 7 note: the connection URL lives in prisma.config.ts (for the CLI and
+// migrations) and in the driver adapter in src/lib/db.ts (for the client).
+// It is no longer declared in this file.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}

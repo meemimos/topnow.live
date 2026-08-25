@@ -1,0 +1,10 @@
+.next
+node_modules
+package-lock.json
+TopNow.html
+reference/prototype-dom.html
+reference/prototype-logic.js
+src/generated
+
+# Supplied source documents — kept byte-identical to what was handed over.
+docs/build-prompt.md
