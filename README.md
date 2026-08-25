@@ -78,6 +78,22 @@ is empty.
 CI runs format, lint, typecheck, unit tests, build and e2e on every push and pull request,
 plus a secret scan. All of it must be green to merge.
 
+## Scenarios
+
+`npm run scenarios` drives the real pricing engine, cap, state machine and sampler
+against a database and prints what actually happens across a series of purchases —
+a queue building, the cap refusing a buyer, decay after a busy spell, a takedown
+mid-rental, a promotion race, and a week of market data.
+
+Every figure it prints comes from the real modules. Nothing in it is illustrative.
+
+**It truncates the database it runs against**, so point it at a scratch one:
+
+```bash
+createdb topnow_scenarios
+DATABASE_URL="postgresql://topnow:topnow@127.0.0.1:5432/topnow_scenarios" npm run scenarios
+```
+
 ## Notes for contributors
 
 **Prisma 7** no longer takes a connection URL in `schema.prisma`. The CLI reads it from
