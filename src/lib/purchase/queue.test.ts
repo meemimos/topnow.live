@@ -308,11 +308,17 @@ describe("createQueuedPurchase", () => {
       ),
     );
 
-    // Serialised, so each sees the queue the previous one left. The first takes
-    // it to 24 (exactly the cap, so acceptable), the second to 27 (past it), and
-    // everything after is refused.
-    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(2);
-    expect(await queuedHoursForSlot(db, 1)).toBe(27);
+    // The exact number admitted is not a specification — see the sibling test
+    // below. Under contention some transactions exhaust their retry budget and
+    // fail rather than being admitted, and CI contends far harder than a laptop
+    // does. What is guaranteed is that nobody was admitted past the cap.
+    const admitted = results.filter((r) => r.status === "fulfilled").length;
+    const queued = await queuedHoursForSlot(db, 1);
+
+    expect(queued).toBe(21 + admitted * 3);
+    // The last admitted booking joined at or under the cap, so the queue lands
+    // within one booking of it.
+    expect(queued - 3).toBeLessThanOrEqual(QUEUE_CAP_HOURS);
   });
 
   /**

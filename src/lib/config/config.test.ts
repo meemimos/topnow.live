@@ -7,7 +7,9 @@ const validServerEnv = {
   NODE_ENV: "test",
   DATABASE_URL: "postgresql://topnow:topnow@127.0.0.1:5432/topnow?schema=public",
   APP_URL: "http://127.0.0.1:3000",
-  CRON_SECRET: "0123456789abcdef0123456789abcdef0123456789abcdef",
+  // Deliberately low-entropy and self-describing: a random-looking hex string
+  // here reads as a real leaked secret to a scanner, and did.
+  CRON_SECRET: "cron-secret-placeholder-for-tests-not-a-real-value",
 } satisfies Record<string, string | undefined>;
 
 describe("server config", () => {

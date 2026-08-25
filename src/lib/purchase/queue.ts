@@ -52,8 +52,14 @@ import {
 const SERIALIZATION_FAILURE = "40001";
 const DEADLOCK_DETECTED = "40P01";
 
-const MAX_SERIALIZATION_RETRIES = 5;
-const RETRY_BASE_DELAY_MS = 10;
+/**
+ * Sized for contention, not for a quiet laptop. CI runners routinely produce
+ * "could not serialize access due to read/write dependencies" in bursts, and a
+ * budget that runs out turns a recoverable conflict into a refused purchase on a
+ * path that takes money.
+ */
+const MAX_SERIALIZATION_RETRIES = 8;
+const RETRY_BASE_DELAY_MS = 20;
 
 export class QueueAtCapacityError extends Error {
   constructor(

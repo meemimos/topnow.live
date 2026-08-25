@@ -1,0 +1,19 @@
+# Secret scanning config (#23).
+#
+# Extends the default ruleset rather than replacing it — every gitleaks rule
+# stays on. The allowlist below covers placeholder values that exist precisely
+# so that no real secret has to appear anywhere, and is matched on the *value*
+# rather than on a path. Allowlisting a path would mean a genuine key pasted
+# into a test file went unreported.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Self-describing placeholder values used in tests, CI and .env.example"
+regexTarget = "match"
+regexes = [
+  '''placeholder''',
+  '''not-a-real-value''',
+  '''replace-me''',
+]
