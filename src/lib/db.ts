@@ -1,35 +1,37 @@
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 
-/**
- * Prisma 7 connects through a driver adapter rather than a `url` in the schema.
- *
- * DATABASE_URL is read directly here because the validated config module is #23;
- * this is the one place that will keep a bare read, and it moves behind the
- * config module when that lands.
- */
-function createClient(): PrismaClient {
-  const url = process.env.DATABASE_URL;
-  if (!url) {
-    throw new Error(
-      "DATABASE_URL is not set. Copy .env.example to .env.local and fill it in — see README.",
-    );
-  }
-  return new PrismaClient({ adapter: new PrismaPg({ connectionString: url }) });
-}
+import { serverConfig } from "@/lib/config/server";
 
 // Next.js hot-reloads modules in development, which would otherwise open a new
 // pool on every edit until Postgres refuses connections.
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
-export const db: PrismaClient = globalForPrisma.prisma ?? createClient();
+/**
+ * The Prisma client, created on first use.
+ *
+ * Lazy rather than instantiated at module load so that `next build` can collect
+ * page data without a database URL — a build machine should not need production
+ * secrets. `instrumentation.ts` validates config at server startup, so a running
+ * server still fails immediately rather than on the first query.
+ *
+ * Prisma 7 connects through a driver adapter; the CLI reads its own URL from
+ * prisma.config.ts.
+ */
+export function getDb(): PrismaClient {
+  if (globalForPrisma.prisma) return globalForPrisma.prisma;
 
-if (process.env.NODE_ENV !== "production") {
-  globalForPrisma.prisma = db;
+  const { DATABASE_URL, NODE_ENV } = serverConfig();
+  const client = new PrismaClient({ adapter: new PrismaPg({ connectionString: DATABASE_URL }) });
+
+  if (NODE_ENV !== "production") {
+    globalForPrisma.prisma = client;
+  }
+  return client;
 }
 
 /** Round-trips a trivial query. Used by the health check and by the scaffold test. */
 export async function checkDatabaseConnection(): Promise<boolean> {
-  await db.$queryRaw`SELECT 1`;
+  await getDb().$queryRaw`SELECT 1`;
   return true;
 }

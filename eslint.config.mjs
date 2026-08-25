@@ -4,15 +4,19 @@ import nextTs from "eslint-config-next/typescript";
 import prettier from "eslint-config-prettier";
 
 /**
- * Two project rules are defined here as disabled stubs. Each is turned on by the
- * issue that makes the codebase able to satisfy it — switching one on before then
- * would just fail CI on code that has not been written yet.
+ * Two project rules.
  *
- *   NO_RAW_HEX     -> enabled by #4  (design tokens and primitives)
- *   NO_BARE_ENV    -> enabled by #23 (environment config and secret handling)
+ *   NO_RAW_HEX   -> still a disabled stub; enabled by #4 (design tokens), which
+ *                   is the issue that gives components tokens to use instead.
+ *   NO_BARE_ENV  -> enabled (#23). Configuration is read from the validated
+ *                   config module so a missing variable fails at boot rather
+ *                   than at the first request that happens to need it.
  */
 
 // #4: no component may declare a raw hex colour. Tokens only.
+// Deliberately unreferenced until #4 adds it to the rule below — kept here so the
+// selector is reviewed in place rather than reinvented.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const NO_RAW_HEX = {
   selector: "Literal[value=/#[0-9a-fA-F]{3,8}\\b/]",
   message: "Raw hex colour. Use a design token from the Tailwind theme instead (see #4).",
@@ -32,8 +36,26 @@ const eslintConfig = defineConfig([
 
   {
     rules: {
-      // Enabled by #4 and #23 respectively. See the note above.
-      "no-restricted-syntax": ["off", NO_RAW_HEX, NO_BARE_ENV],
+      // NO_RAW_HEX stays off until #4. See the note above.
+      "no-restricted-syntax": ["error", NO_BARE_ENV],
+    },
+  },
+
+  {
+    // The config module is the one place that reads the environment, so it is
+    // necessarily exempt. Tooling configs run outside the Next.js runtime and
+    // cannot import from src/, so they are exempt too.
+    files: [
+      "src/lib/config/**",
+      "src/instrumentation.ts",
+      "scripts/**",
+      "*.config.ts",
+      "*.config.mts",
+      "*.config.mjs",
+      "*.setup.ts",
+    ],
+    rules: {
+      "no-restricted-syntax": "off",
     },
   },
 

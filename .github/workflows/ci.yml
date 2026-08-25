@@ -58,6 +58,10 @@ jobs:
       - name: Build
         run: npm run build
 
+      # A server value in the browser bundle is a leak, not a style issue (#23).
+      - name: Check the client bundle for secrets
+        run: npm run check:bundle
+
       # Only the browsers the suite actually uses; the runner has no preinstalled copy.
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
