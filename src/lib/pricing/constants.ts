@@ -37,12 +37,14 @@ export const DURATION_HOURS = DURATIONS.map((d) => d.hours) as readonly Duration
  *
  *     multiplier = 1 + min(queued_hours / QUEUE_CAP_HOURS, 1.0)
  *
- * The same constant caps the queue in #24, so at the ceiling a slot is
- * simultaneously at 2.0x and closed to new entries: the multiplier reads
- * directly as how full the queue is, and there is one constant instead of two.
+ * The same constant caps the wait in #24: a slot stops accepting bookings once
+ * more than this many hours are already queued, so the multiplier reads directly
+ * as how close the slot is to closing, and there is one constant instead of two.
  *
  * 18 hours reproduces the prototype's headline multiplier at its own queue depth
- * (12 queued hours -> 1.67x) and means nobody ever waits more than 18 hours.
+ * (12 queued hours -> 1.67x) and means nobody ever joins a wait longer than 18
+ * hours. Note that the cap is on the wait a buyer inherits, not on the queue
+ * itself — see src/lib/purchase/queue.ts for why, and for the consequence.
  */
 export const QUEUE_CAP_HOURS = 18;
 

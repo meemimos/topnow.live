@@ -112,8 +112,15 @@ QUEUE_CAP_HOURS = 18
 ```
 
 Surge is driven by **total queued hours**, not head count, and shares its constant with the
-queued-hours cap in #24 — at the cap a slot is at 2.0x and stops accepting entries, so the
-multiplier is a direct readout of how full the queue is. One constant, two jobs.
+wait cap in #24 — a slot at 18 queued hours is at 2.0x and about to stop accepting bookings,
+so the multiplier is a direct readout of how close the slot is to closing. One constant, two jobs.
+
+**Amendment (#24): the cap is on the wait, not on the queue.** Capping `queued + requested`
+makes the 24h duration unbuyable outright, since 0 + 24 already exceeds 18. A booking is
+therefore refused when the hours _already_ queued exceed the cap — your own booking is not
+part of your own wait. Consequence: total queued hours can reach 18 + 24 = 42 in the worst
+case, during which the slot sits at its 2.0x ceiling and refuses everyone. Nobody in that
+queue ever joined a wait longer than 18 hours.
 
 At the prototype's own queue depth (12 queued hours on slot 01) this gives **1.67x / $8.33/hr**
 against the mockup's 1.7x / $8.50 — the artwork's headline number without art-directing the formula.
@@ -123,7 +130,8 @@ Consequences to carry through:
 - #24's cap is no longer an independent constant; it _is_ `QUEUE_CAP_HOURS`.
 - #14's "how surge moves" copy must describe queued hours. The prototype's wording assumes
   head count and needs rewriting.
-- Maximum wait to go live is bounded at 18 hours and is stated in the pricing dialog.
+- Maximum wait at the point of joining is bounded at 18 hours, and that is the number stated
+  in the pricing dialog.
 
 ### D3. Launch-day chart — RESOLVED: hold behind a flag until 20h of trading
 

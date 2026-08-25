@@ -23,6 +23,11 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // Several suites exercise real database constraints and truncate between
+    // tests. Run files one at a time so they cannot clear each other's rows —
+    // in parallel they pass individually and fail together, which is the most
+    // misleading failure mode available.
+    fileParallelism: false,
     setupFiles: ["./vitest.setup.ts"],
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     // Playwright specs live in e2e/ and are run by `npm run test:e2e`.
