@@ -1,5 +1,12 @@
 import { expect, test } from "@playwright/test";
 
+import { quoteForQueue } from "../src/lib/pricing";
+import { actionLabel } from "../src/lib/pricing/format";
+
+// Derived the same way the page derives it, so a pricing change cannot leave
+// these tests asserting on a stale string.
+const PRIMARY_BUTTON = actionLabel(quoteForQueue(1, 3, 12), false);
+
 /**
  * The token layer is only useful if the values that reach the browser are the
  * ones measured from TopNow.html. These assert the computed styles, not the
@@ -45,7 +52,7 @@ test("plates carry the 2px bevel and controls the 3px bevel", async ({ page }) =
   expect(plateShadow).toContain("-2px -2px");
 
   const buttonShadow = await page
-    .getByRole("button", { name: "TAKE SLOT 01 — $25.50" })
+    .getByRole("button", { name: PRIMARY_BUTTON })
     .evaluate((el) => getComputedStyle(el).boxShadow);
   expect(buttonShadow).toContain("-3px -3px");
 });
@@ -60,7 +67,7 @@ test("Silkscreen is applied to labels and is self-hosted", async ({ page }) => {
   await page.evaluate(() => document.fonts.ready);
 
   const family = await page
-    .getByRole("button", { name: "TAKE SLOT 01 — $25.50" })
+    .getByRole("button", { name: PRIMARY_BUTTON })
     .evaluate((el) => getComputedStyle(el).fontFamily);
   expect(family).toContain("Silkscreen");
 
@@ -76,7 +83,7 @@ test("Silkscreen is applied to labels and is self-hosted", async ({ page }) => {
 test("the focus ring is visible and amber", async ({ page }) => {
   await page.goto("/dev/primitives");
 
-  const button = page.getByRole("button", { name: "TAKE SLOT 01 — $25.50" });
+  const button = page.getByRole("button", { name: PRIMARY_BUTTON });
   await button.focus();
 
   const outline = await button.evaluate((el) => {

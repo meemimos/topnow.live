@@ -21,7 +21,9 @@
     "postinstall": "prisma generate",
     "check:bundle": "node scripts/check-client-bundle.mjs",
     "db:seed": "tsx prisma/seed.ts",
-    "db:reset": "prisma migrate reset"
+    "db:reset": "prisma migrate reset",
+    "check:prices": "node scripts/check-no-price-literals.mjs",
+    "pretest:e2e": "npm run build"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.1",

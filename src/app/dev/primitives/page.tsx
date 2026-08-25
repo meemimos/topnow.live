@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 
 import { BevelButton } from "@/components/ui/bevel-button";
+import { actionLabel, derivation, formatMoney, lineItem } from "@/lib/pricing/format";
+import { quoteForQueue } from "@/lib/pricing";
 import { Plate, VacantPlate } from "@/components/ui/plate";
 import { TitleBar } from "@/components/ui/title-bar";
 
@@ -96,6 +98,12 @@ function Section({
 }
 
 export default function PrimitivesPage() {
+  // Derived, not typed in. The kitchen sink is subject to the same rule as every
+  // other surface: no price is written down outside the pricing engine (#2).
+  // 12 queued hours is the prototype's own queue depth on slot 01.
+  const sample = quoteForQueue(1, 3, 12);
+  const sampleAction = actionLabel(sample, false);
+
   return (
     <main className="mx-auto flex max-w-[1020px] flex-col px-2 py-3">
       <Plate className="mb-3 p-[3px]">
@@ -130,7 +138,7 @@ export default function PrimitivesPage() {
           </div>
           {TYPE_SCALE.map(([label, className]) => (
             <div key={label} className={`font-pixel ${className}`}>
-              {label} — TAKE SLOT 01 — $25.50
+              {label} — {sampleAction}
             </div>
           ))}
         </div>
@@ -225,8 +233,11 @@ export default function PrimitivesPage() {
             Large &mdash; the panel&rsquo;s primary action
           </div>
           <BevelButton variant="navy" size="lg">
-            TAKE SLOT 01 — $25.50
+            {sampleAction}
           </BevelButton>
+          <div className="mt-2 font-pixel text-2xs text-ink-soft">
+            {lineItem(sample)} · {derivation(sample)} · {formatMoney(sample.totalCents)}
+          </div>
         </div>
       </Section>
 

@@ -54,6 +54,10 @@ jobs:
       - name: Lint
         run: npm run lint:eslint
 
+      # Every displayed figure derives from one calculation (#2).
+      - name: Check for price literals outside the pricing engine
+        run: npm run check:prices
+
       - name: Typecheck
         run: npm run typecheck
 
