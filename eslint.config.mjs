@@ -43,12 +43,14 @@ const eslintConfig = defineConfig([
 
   {
     // The config module is the one place that reads the environment, so it is
-    // necessarily exempt. Tooling configs run outside the Next.js runtime and
-    // cannot import from src/, so they are exempt too.
+    // necessarily exempt. Everything else here runs outside the Next.js runtime
+    // — tooling configs, standalone scripts, the Prisma seed — and so cannot
+    // import the server-only config module at all.
     files: [
       "src/lib/config/**",
       "src/instrumentation.ts",
       "scripts/**",
+      "prisma/**",
       "*.config.ts",
       "*.config.mts",
       "*.config.mjs",

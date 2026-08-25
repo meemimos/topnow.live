@@ -47,9 +47,16 @@ psql -c "ALTER DATABASE topnow OWNER TO topnow;"
 # 3. Environment
 cp .env.example .env.local     # then fill it in
 
-# 4. Run
+# 4. Schema
+npm run db:migrate             # creates and applies migrations
+
+# 5. Run
 npm run dev                    # http://127.0.0.1:3000
 ```
+
+There is **no seed data and there never will be** — see the rule above.
+`npm run db:seed` exists only to confirm the schema is applied and the database
+is empty.
 
 `GET /api/health` reports whether the database connection is live.
 
@@ -75,6 +82,15 @@ plus a secret scan. All of it must be green to merge.
 
 **Prisma 7** no longer takes a connection URL in `schema.prisma`. The CLI reads it from
 `prisma.config.ts`; the runtime client connects through the driver adapter in `src/lib/db.ts`.
+`getDb()` is lazy so that `next build` needs no database URL.
+
+**The schema's constraints are load-bearing.** `purchase_one_live_per_slot` — a partial
+unique index — is what makes concurrent promotion safe in
+[#1](https://github.com/meemimos/topnow.live/issues/1) without application locks. None of
+the constraints in the migration may be relaxed into an application-level check.
+
+**Configuration** is read through `src/lib/config`, never `process.env` directly, which
+ESLint enforces. The server refuses to boot on a missing or malformed variable and names it.
 
 **Playwright browsers.** In the dev container Chromium is preinstalled under
 `/opt/pw-browsers` and `playwright.config.ts` points at it directly. **Do not run

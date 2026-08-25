@@ -1,13 +1,23 @@
 // TopNow schema.
 //
-// The `purchase` model and every constraint that makes the slot state machine
-// safe are owned by #21 — deliberately not defined here. This file exists so
-// the scaffold (#25) can prove a real connection to Postgres before any model
-// is designed.
+// One table drives the product. A queue entry and a completed sale are the same
+// `Purchase` record at different points in its life:
 //
-// Prisma 7 note: the connection URL lives in prisma.config.ts (for the CLI and
-// migrations) and in the driver adapter in src/lib/db.ts (for the client).
-// It is no longer declared in this file.
+//     queued --promotion--> live --expiry--> ended
+//        \                    \
+//         `----- killed -------'   (admin, #17)
+//
+// board = status live · queue = status queued, oldest first · tape = status
+// ended, newest first · chart = priceHrCents against boughtAt. All four are
+// queries over this one table, never separate tables.
+//
+// Liveness is derived from timestamps, not from `status` — see #1. A rental
+// whose window has passed has ended whether or not any process noticed. Status
+// is a materialised convenience for indexing and for the ledger's three
+// sections; where the two disagree, the timestamps win.
+//
+// Prisma 7 note: the connection URL lives in prisma.config.ts (CLI, migrations)
+// and in the driver adapter in src/lib/db.ts (runtime). Not in this file.
 
 generator client {
   provider = "prisma-client-js"
@@ -15,4 +25,114 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+}
+
+enum Platform {
+  github
+  youtube
+  instagram
+  tiktok
+  reddit
+  web
+}
+
+enum PurchaseStatus {
+  queued
+  live
+  ended
+  killed
+}
+
+model Purchase {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// 1 | 2 | 3. Constrained in the migration.
+  slot Int
+
+  handle   String   @db.VarChar(64)
+  platform Platform
+
+  /// Websites have no handle to show, so they carry a display name instead.
+  /// Constrained in the migration to be present for `web` and absent otherwise.
+  displayName String? @db.VarChar(24)
+
+  /// Derived from platform + handle, or supplied for websites. Always absolute.
+  targetUrl String @db.VarChar(2048)
+
+  tagline String @db.VarChar(60)
+
+  /// 1 | 3 | 6 | 12 | 24. A snap point, constrained in the migration.
+  durationH Int
+
+  /// The ask at checkout, locked. Nobody already queued is ever re-priced.
+  /// Integer cents — money is never a float.
+  priceHrCents Int
+
+  /// priceHrCents * durationH, written by the Stripe webhook (#26) from the
+  /// locked session metadata rather than recomputed.
+  totalPaidCents Int
+
+  /// The print on the chart.
+  boughtAt DateTime @default(now()) @db.Timestamptz(3)
+
+  /// Null until promoted. Constrained in the migration to be non-null exactly
+  /// when the row is not queued.
+  startsAt DateTime? @db.Timestamptz(3)
+
+  /// startsAt + durationH. Enforced in the migration, not assumed.
+  endsAt DateTime? @db.Timestamptz(3)
+
+  status PurchaseStatus @default(queued)
+
+  /// Set when an admin kills a listing (#17). The row stays in the ledger.
+  killedAt     DateTime? @db.Timestamptz(3)
+  killedReason String?   @db.VarChar(500)
+
+  /// Stripe's checkout session id. Unique, which is what makes the webhook
+  /// idempotent under duplicate delivery (#26) — a constraint, not a check.
+  stripeSessionId String? @unique @db.VarChar(255)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  // Board, queue and tape reads all filter by slot and status and order by
+  // boughtAt.
+  @@index([slot, status, boughtAt])
+  // The tape, across all slots.
+  @@index([status, boughtAt])
+  // Expiry and promotion scan live rentals by when they end.
+  @@index([status, endsAt])
+  @@map("purchase")
+}
+
+/// One row per slot per hour: the ask, sampled (#22). This is the series the
+/// chart's candles are built from (#12), and it is why the chart has a line
+/// even in an hour with no sales.
+///
+/// A missed hour stays missing. Nothing backfills or interpolates it — #13
+/// renders the gap honestly.
+model AskSample {
+  id Int @id @default(autoincrement())
+
+  slot Int
+
+  /// Truncated to the hour, UTC. Unique with slot, which makes #22's hourly
+  /// job idempotent under repeat and concurrent runs.
+  hour DateTime @db.Timestamptz(3)
+
+  /// The ask at sample time, in integer cents.
+  askHrCents Int
+
+  /// The slot's base rate at sample time, so a later change to base rates does
+  /// not silently rewrite chart history.
+  baseHrCents Int
+
+  /// Queued hours at sample time — the input to surge under decision D2.
+  queuedHours Int
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([slot, hour])
+  @@index([slot, hour])
+  @@map("ask_sample")
 }

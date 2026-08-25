@@ -43,6 +43,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Constraints are tested against a real Postgres, so the schema must exist
+      # before the unit tests run (#21).
+      - name: Apply migrations
+        run: npm run db:deploy
+
       - name: Check formatting
         run: npm run format:check
 
