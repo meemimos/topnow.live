@@ -96,11 +96,21 @@ ESLint enforces. The server refuses to boot on a missing or malformed variable a
 `/opt/pw-browsers` and `playwright.config.ts` points at it directly. **Do not run
 `playwright install` there.** CI installs its own copy.
 
-**Two lint rules are staged but disabled** in `eslint.config.mjs`, each turned on by the
-issue that makes the codebase able to satisfy it:
+**Two project lint rules are enforced in CI**, not by review:
 
-- no raw hex colours in components — enabled by [#4](https://github.com/meemimos/topnow.live/issues/4)
-- no bare `process.env` outside the config module — enabled by [#23](https://github.com/meemimos/topnow.live/issues/23)
+- **no raw hex colours in components** — use a design token. Catches both inline styles and
+  Tailwind arbitrary values like `text-[#c40000]`.
+- **no bare `process.env`** outside `src/lib/config` — configuration is validated at boot.
+
+**Colour discipline is a hard rule.** Green and red mean price direction on the chart and
+nowhere else. Time is amber. A price premium is a multiplier (`1.70× base`), never a colour.
+Surge urgency comes from weight, size and a black plate — not from red.
+
+**Bevels**: plates are 2px, controls are 3px. The build prompt specifies 3px for both; the
+prototype uses 2px on plates and 3px on buttons. The prototype is binding for visuals.
+
+**Focus rings are amber**, not the navy the build prompt specifies — navy on a navy primary
+button is invisible, and the primary is the control that most needs a visible ring.
 
 **The shadcn registry (`ui.shadcn.com`) is unreachable** from this environment's network
 policy, so `npx shadcn add` will fail. `components.json` and `cn()` are configured, and the
