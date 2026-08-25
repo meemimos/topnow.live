@@ -17,7 +17,6 @@ import { z } from "zod";
  *   Admin auth (#17)        ADMIN_*
  *   Rate limiting (#18)     RATE_LIMIT_*
  *   Avatar / oEmbed (#19,#20)
- *   Scheduler auth (#22)    CRON_SECRET
  */
 
 const serverSchema = z.object({
@@ -35,6 +34,12 @@ const serverSchema = z.object({
   // Absolute origin the app is served from. Used for Stripe redirects (#26) and
   // for building the canonical target links the board renders.
   APP_URL: z.url({ error: "APP_URL must be an absolute URL, e.g. http://127.0.0.1:3000" }),
+
+  // Authenticates the hourly job endpoint (#22). An open scheduler endpoint is
+  // an unauthenticated write. Long enough that guessing is not worth trying.
+  CRON_SECRET: z
+    .string({ error: "CRON_SECRET is required" })
+    .min(32, "CRON_SECRET must be at least 32 characters"),
 });
 
 export type ServerConfig = z.infer<typeof serverSchema>;

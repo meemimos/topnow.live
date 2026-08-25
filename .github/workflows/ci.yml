@@ -12,6 +12,9 @@ concurrency:
 env:
   DATABASE_URL: postgresql://topnow:topnow@127.0.0.1:5432/topnow?schema=public
   APP_URL: http://127.0.0.1:3000
+  # Not a secret: a throwaway value so boot validation passes in CI. The real
+  # one is generated per environment (#22, #23).
+  CRON_SECRET: ci-only-placeholder-at-least-thirty-two-chars
 
 jobs:
   verify:
