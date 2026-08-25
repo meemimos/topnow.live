@@ -29,7 +29,8 @@ export type DurationHours = (typeof DURATIONS)[number]["hours"];
 export const DURATION_HOURS = DURATIONS.map((d) => d.hours) as readonly DurationHours[];
 
 /**
- * Decision D2.
+ * Decision D2, as amended after the scenario harness (`npm run scenarios`)
+ * showed the original 18-hour value failing its own guarantee.
  *
  * Surge is driven by total queued hours, not head count — what a buyer
  * experiences is the wait, and four people booking 24h each is a 96-hour queue
@@ -37,16 +38,26 @@ export const DURATION_HOURS = DURATIONS.map((d) => d.hours) as readonly Duration
  *
  *     multiplier = 1 + min(queued_hours / QUEUE_CAP_HOURS, 1.0)
  *
- * The same constant caps the wait in #24: a slot stops accepting bookings once
- * more than this many hours are already queued, so the multiplier reads directly
- * as how close the slot is to closing, and there is one constant instead of two.
+ * The same constant caps the wait in #24, so a slot at the ceiling is both at
+ * 2.00x and about to stop accepting bookings.
  *
- * 18 hours reproduces the prototype's headline multiplier at its own queue depth
- * (12 queued hours -> 1.67x) and means nobody ever joins a wait longer than 18
- * hours. Note that the cap is on the wait a buyer inherits, not on the queue
- * itself — see src/lib/purchase/queue.ts for why, and for the consequence.
+ * ## Why 24 and not 18
+ *
+ * At 18 the scenarios produced a buyer waiting 19.4 hours: the cap counted
+ * queued hours but ignored the time left on the rental currently on the board.
+ * The worst case was a fresh 24h rental plus 18 queued hours — a 42-hour wait,
+ * exactly the multi-day wait #24 exists to prevent.
+ *
+ * #24 now caps live-remaining plus queued, and 24 hours is the value that keeps
+ * the 24h booking buyable on an empty slot while making the maximum wait a true
+ * day. At 18 a slot whose 24h rental had just started would have accepted no
+ * bookings at all for its first six hours.
+ *
+ * The cost, accepted deliberately: slot 01 at the prototype's own queue depth of
+ * 12 queued hours is now 1.50x / $7.50/hr rather than 1.67x / $8.35, so it sits
+ * further from the mockup's $8.50.
  */
-export const QUEUE_CAP_HOURS = 18;
+export const QUEUE_CAP_HOURS = 24;
 
 /** Surge never exceeds this. Reached exactly at QUEUE_CAP_HOURS. */
 export const MAX_MULTIPLIER_CM = 200;

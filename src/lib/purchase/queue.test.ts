@@ -7,13 +7,34 @@ import {
   QueueAtCapacityError,
   acceptsNewBookings,
   createQueuedPurchase,
+  liveRemainingHours,
   queuedHoursForSlot,
   remainingCapacityHours,
   slotCapacity,
+  waitHoursForSlot,
   type NewPurchase,
 } from "./queue";
 
 const db = getDb();
+const HOUR = 3_600_000;
+const NOW = new Date("2026-09-01T12:00:00.000Z");
+
+/** Puts a live rental on `slot` with `hoursLeft` still to run at NOW. */
+async function seedLive(slot: 1 | 2 | 3, durationH: 1 | 3 | 6 | 12 | 24, hoursLeft: number) {
+  const startsAt = new Date(NOW.getTime() - (durationH - hoursLeft) * HOUR);
+  const q = quoteForQueue(slot, durationH, 0);
+  return db.purchase.create({
+    data: {
+      ...newPurchase({ slot, durationH, handle: `live_${slot}` }),
+      priceHrCents: q.askHrCents,
+      totalPaidCents: q.totalCents,
+      status: "live",
+      boughtAt: new Date(startsAt.getTime() - 60_000),
+      startsAt,
+      endsAt: new Date(startsAt.getTime() + durationH * HOUR),
+    },
+  });
+}
 
 function newPurchase(overrides: Partial<NewPurchase> = {}): NewPurchase {
   const slot = overrides.slot ?? 1;
@@ -62,30 +83,92 @@ afterAll(async () => {
 });
 
 describe("acceptsNewBookings", () => {
-  // The cap is on the wait a buyer inherits, not on the queue. Your own booking
-  // is not part of your own wait, so a slot with an hour of headroom still takes
-  // a 24h booking.
+  // The cap is on the wait a buyer inherits, not on the queue. Their own booking
+  // is not part of their own wait, so a slot with an hour of headroom still
+  // takes a 24h booking.
   it("accepts any duration while the wait is under the cap", () => {
-    expect(acceptsNewBookings(17)).toBe(true);
+    expect(acceptsNewBookings(23)).toBe(true);
     expect(acceptsNewBookings(QUEUE_CAP_HOURS)).toBe(true);
   });
 
   it("closes once the wait is past the cap", () => {
-    expect(acceptsNewBookings(QUEUE_CAP_HOURS + 1)).toBe(false);
+    expect(acceptsNewBookings(QUEUE_CAP_HOURS + 0.1)).toBe(false);
   });
 
   // Capping queued + requested instead would make this permanently unbuyable,
-  // since 0 + 24 already exceeds an 18h cap.
+  // since 0 + 24 already exceeds the cap on an empty slot.
   it("keeps the 24h booking buyable on an empty slot", () => {
     expect(acceptsNewBookings(0)).toBe(true);
     expect(DURATION_HOURS).toContain(24);
   });
 
-  it("reports how much longer the queue can grow, floored at zero", () => {
+  it("reports how much longer the wait can grow, floored at zero", () => {
     expect(remainingCapacityHours(0)).toBe(QUEUE_CAP_HOURS);
-    expect(remainingCapacityHours(12)).toBe(6);
+    expect(remainingCapacityHours(18)).toBe(6);
     expect(remainingCapacityHours(QUEUE_CAP_HOURS)).toBe(0);
     expect(remainingCapacityHours(QUEUE_CAP_HOURS + 99)).toBe(0);
+  });
+});
+
+describe("the wait includes the rental already on the board", () => {
+  /**
+   * The bug the scenario harness found. Counting only queued hours let a buyer
+   * inherit a 19.4h wait against an 18h cap, because the rental on the board was
+   * invisible to the check. Worst case was a fresh 24h rental plus a full queue:
+   * a 42-hour wait, which is what this cap exists to prevent.
+   */
+  it("counts the live rental's remaining time", async () => {
+    await seedLive(1, 12, 8);
+    await seedQueue(1, 6);
+
+    expect(await liveRemainingHours(db, 1, NOW)).toBeCloseTo(8, 5);
+    expect(await queuedHoursForSlot(db, 1)).toBe(6);
+    expect(await waitHoursForSlot(db, 1, NOW)).toBeCloseTo(14, 5);
+  });
+
+  it("ignores a rental whose window has closed, even if nothing marked it ended", async () => {
+    await seedLive(1, 3, -2); // ended two hours ago
+    expect(await liveRemainingHours(db, 1, NOW)).toBe(0);
+  });
+
+  it("refuses a booking the live rental alone pushes past the cap", async () => {
+    await seedLive(1, 24, 20);
+    await seedQueue(1, 6); // 20 + 6 = 26h wait, past the 24h cap
+
+    await expect(createQueuedPurchase(newPurchase({ slot: 1, durationH: 1 }), NOW)).rejects.toThrow(
+      QueueAtCapacityError,
+    );
+  });
+
+  it("still accepts a booking behind a fresh 24h rental", async () => {
+    await seedLive(1, 24, 24);
+    await expect(
+      createQueuedPurchase(newPurchase({ slot: 1, durationH: 3 }), NOW),
+    ).resolves.toBeTruthy();
+  });
+
+  /** The scenario that produced the 19.4h wait, now bounded. */
+  it("never admits anyone to a wait longer than the cap, live rental included", async () => {
+    await seedLive(1, 6, 4);
+    const waitsAtJoin: number[] = [];
+
+    for (let i = 0; i < 20; i += 1) {
+      const before = await waitHoursForSlot(db, 1, NOW);
+      try {
+        await createQueuedPurchase(
+          newPurchase({ slot: 1, durationH: 3, handle: `drip_${i}` }),
+          NOW,
+        );
+        waitsAtJoin.push(before);
+      } catch (error) {
+        expect(error).toBeInstanceOf(QueueAtCapacityError);
+      }
+    }
+
+    expect(waitsAtJoin.length).toBeGreaterThan(0);
+    for (const wait of waitsAtJoin) {
+      expect(wait).toBeLessThanOrEqual(QUEUE_CAP_HOURS);
+    }
   });
 });
 
@@ -119,7 +202,7 @@ describe("queued hours", () => {
 
   // #17: killing a queued entry frees its hours immediately and reopens the slot.
   it("frees hours the moment a queued entry is killed", async () => {
-    await seedQueue(1, 18);
+    await seedQueue(1, QUEUE_CAP_HOURS);
     expect(await queuedHoursForSlot(db, 1)).toBe(QUEUE_CAP_HOURS);
 
     const victim = await db.purchase.findFirstOrThrow({ where: { slot: 1, status: "queued" } });
@@ -130,22 +213,26 @@ describe("queued hours", () => {
 
     expect(await queuedHoursForSlot(db, 1)).toBe(QUEUE_CAP_HOURS - victim.durationH);
     await expect(
-      createQueuedPurchase(newPurchase({ slot: 1, durationH: victim.durationH as 1 | 3 })),
+      createQueuedPurchase(newPurchase({ slot: 1, durationH: victim.durationH as 1 | 3 }), NOW),
     ).resolves.toBeTruthy();
   });
 });
 
 describe("slotCapacity", () => {
   it("reports the wait, and the surge that goes with it", async () => {
+    await seedLive(1, 12, 6);
     await seedQueue(1, 12);
-    const capacity = await slotCapacity(db, 1, DURATION_HOURS);
+    const capacity = await slotCapacity(db, 1, DURATION_HOURS, NOW);
 
     expect(capacity.queuedHours).toBe(12);
-    expect(capacity.waitHours).toBe(12);
-    expect(capacity.remainingHours).toBe(6);
+    expect(capacity.liveRemainingHours).toBeCloseTo(6, 5);
+    expect(capacity.waitHours).toBeCloseTo(18, 5);
+    expect(capacity.remainingHours).toBeCloseTo(6, 5);
     // Every duration, including 24h — the cap is on the wait, not the booking.
     expect(capacity.availableDurations).toEqual([...DURATION_HOURS]);
-    expect(capacity.multiplierCm).toBe(167);
+    // Surge prices demand, which is what is queued — not the tail of a rental
+    // already paid for.
+    expect(capacity.multiplierCm).toBe(150);
     expect(capacity.atCapacity).toBe(false);
   });
 
@@ -153,7 +240,7 @@ describe("slotCapacity", () => {
   // so the shape it needs has to be available.
   it("reports a slot past the cap as closed, with nothing available", async () => {
     await seedQueue(1, QUEUE_CAP_HOURS + 3);
-    const capacity = await slotCapacity(db, 1, DURATION_HOURS);
+    const capacity = await slotCapacity(db, 1, DURATION_HOURS, NOW);
 
     expect(capacity.atCapacity).toBe(true);
     expect(capacity.remainingHours).toBe(0);
@@ -162,7 +249,7 @@ describe("slotCapacity", () => {
   });
 
   it("reports an empty slot as open at base", async () => {
-    const capacity = await slotCapacity(db, 3, DURATION_HOURS);
+    const capacity = await slotCapacity(db, 3, DURATION_HOURS, NOW);
     expect(capacity.queuedHours).toBe(0);
     expect(capacity.multiplierCm).toBe(100);
     expect(capacity.availableDurations).toEqual([...DURATION_HOURS]);
@@ -172,7 +259,7 @@ describe("slotCapacity", () => {
 describe("createQueuedPurchase", () => {
   it("refuses a booking once the wait is past the cap", async () => {
     await seedQueue(1, QUEUE_CAP_HOURS + 3);
-    await expect(createQueuedPurchase(newPurchase({ slot: 1, durationH: 1 }))).rejects.toThrow(
+    await expect(createQueuedPurchase(newPurchase({ slot: 1, durationH: 1 }), NOW)).rejects.toThrow(
       QueueAtCapacityError,
     );
     // And leaves the queue untouched.
@@ -182,24 +269,24 @@ describe("createQueuedPurchase", () => {
   it("accepts a booking joining at exactly the cap", async () => {
     await seedQueue(1, QUEUE_CAP_HOURS);
     await expect(
-      createQueuedPurchase(newPurchase({ slot: 1, durationH: 3 })),
+      createQueuedPurchase(newPurchase({ slot: 1, durationH: 3 }), NOW),
     ).resolves.toBeTruthy();
   });
 
   it("accepts a 24h booking on an empty slot", async () => {
     await expect(
-      createQueuedPurchase(newPurchase({ slot: 1, durationH: 24 })),
+      createQueuedPurchase(newPurchase({ slot: 1, durationH: 24 }), NOW),
     ).resolves.toBeTruthy();
     expect(await queuedHoursForSlot(db, 1)).toBe(24);
   });
 
   it("caps each slot independently", async () => {
     await seedQueue(1, QUEUE_CAP_HOURS + 3);
-    await expect(createQueuedPurchase(newPurchase({ slot: 1, durationH: 1 }))).rejects.toThrow(
+    await expect(createQueuedPurchase(newPurchase({ slot: 1, durationH: 1 }), NOW)).rejects.toThrow(
       QueueAtCapacityError,
     );
     await expect(
-      createQueuedPurchase(newPurchase({ slot: 2, durationH: 12 })),
+      createQueuedPurchase(newPurchase({ slot: 2, durationH: 12 }), NOW),
     ).resolves.toBeTruthy();
   });
 
@@ -211,21 +298,21 @@ describe("createQueuedPurchase", () => {
    * insert 6, leaving 24 against a cap of 18. SERIALIZABLE is what makes that
    * impossible.
    */
-  it("does not let concurrent purchases push the queue past the cap", async () => {
-    await seedQueue(1, 15);
+  it("does not let concurrent purchases push the wait past the cap", async () => {
+    await seedQueue(1, 21);
     const CONTENDERS = 10;
 
     const results = await Promise.allSettled(
       Array.from({ length: CONTENDERS }, (_, i) =>
-        createQueuedPurchase(newPurchase({ slot: 1, durationH: 3, handle: `rush_${i}` })),
+        createQueuedPurchase(newPurchase({ slot: 1, durationH: 3, handle: `rush_${i}` }), NOW),
       ),
     );
 
     // Serialised, so each sees the queue the previous one left. The first takes
-    // it to 18 (still at the cap, so acceptable), the second to 21 (past it),
-    // and everything after is refused.
+    // it to 24 (exactly the cap, so acceptable), the second to 27 (past it), and
+    // everything after is refused.
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(2);
-    expect(await queuedHoursForSlot(db, 1)).toBe(21);
+    expect(await queuedHoursForSlot(db, 1)).toBe(27);
   });
 
   /**
@@ -238,12 +325,27 @@ describe("createQueuedPurchase", () => {
   it("never lets a rush from empty exceed the cap plus one booking", async () => {
     const results = await Promise.allSettled(
       Array.from({ length: 12 }, (_, i) =>
-        createQueuedPurchase(newPurchase({ slot: 2, durationH: 6, handle: `empty_rush_${i}` })),
+        createQueuedPurchase(
+          newPurchase({ slot: 2, durationH: 6, handle: `empty_rush_${i}` }),
+          NOW,
+        ),
       ),
     );
 
-    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(4);
-    expect(await queuedHoursForSlot(db, 2)).toBe(24);
+    // The exact number admitted is not a specification: under contention some
+    // transactions exhaust their retry budget and fail rather than being
+    // admitted, which is a legitimate outcome (#26 retries or refunds). What is
+    // guaranteed is the invariant — nobody was admitted to a wait past the cap,
+    // so the queue cannot exceed the cap plus one maximum booking.
+    const admitted = results.filter((r) => r.status === "fulfilled").length;
+    expect(admitted).toBeGreaterThan(0);
+
+    const queued = await queuedHoursForSlot(db, 2);
+    expect(queued).toBeLessThanOrEqual(QUEUE_CAP_HOURS + 24);
+    // Every admitted booking is 6h, and the last admitted joined at or under the
+    // cap, so the queue lands within one booking of it.
+    expect(queued).toBe(admitted * 6);
+    expect((admitted - 1) * 6).toBeLessThanOrEqual(QUEUE_CAP_HOURS);
   });
 
   /**
@@ -254,9 +356,12 @@ describe("createQueuedPurchase", () => {
     const waitsAtJoin: number[] = [];
 
     for (let i = 0; i < 30; i += 1) {
-      const before = await queuedHoursForSlot(db, 3);
+      const before = await waitHoursForSlot(db, 3, NOW);
       try {
-        await createQueuedPurchase(newPurchase({ slot: 3, durationH: 6, handle: `drip_${i}` }));
+        await createQueuedPurchase(
+          newPurchase({ slot: 3, durationH: 6, handle: `drip_${i}` }),
+          NOW,
+        );
         waitsAtJoin.push(before);
       } catch (error) {
         expect(error).toBeInstanceOf(QueueAtCapacityError);

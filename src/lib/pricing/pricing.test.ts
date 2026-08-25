@@ -53,11 +53,11 @@ describe("surge from queued hours (decision D2)", () => {
   // prototype's own queue depth of 12 queued hours should produce.
   it.each([
     [0, 100, 500],
-    [3, 117, 585],
-    [6, 133, 665],
-    [9, 150, 750],
-    [12, 167, 835],
-    [18, 200, 1000],
+    [3, 113, 565],
+    [6, 125, 625],
+    [12, 150, 750],
+    [18, 175, 875],
+    [24, 200, 1000],
   ])("%ih queued -> %i cm -> slot 01 asks %i cents", (queuedHours, cm, slot1Cents) => {
     expect(surgeFromQueuedHours(queuedHours)).toBe(cm);
     expect(askHrCents(1, cm)).toBe(slot1Cents);
@@ -69,7 +69,7 @@ describe("surge from queued hours (decision D2)", () => {
   });
 
   it("never exceeds the cap, however long the queue", () => {
-    for (const queuedHours of [19, 24, 100, 10_000]) {
+    for (const queuedHours of [25, 48, 100, 10_000]) {
       expect(surgeFromQueuedHours(queuedHours)).toBe(MAX_MULTIPLIER_CM);
     }
   });
@@ -80,7 +80,7 @@ describe("surge from queued hours (decision D2)", () => {
 
   it("rises monotonically with queued hours", () => {
     let previous = 0;
-    for (let hours = 0; hours <= 24; hours += 1) {
+    for (let hours = 0; hours <= 30; hours += 1) {
       const current = surgeFromQueuedHours(hours);
       expect(current).toBeGreaterThanOrEqual(previous);
       previous = current;
@@ -107,8 +107,9 @@ describe("decay", () => {
 
   // Demand pushes the ask up immediately; only time brings it back down.
   it("floors at whatever the current queue justifies", () => {
-    expect(decayOneHour(200, 18)).toBe(200);
-    expect(decayOneHour(120, 9)).toBe(150);
+    expect(decayOneHour(200, QUEUE_CAP_HOURS)).toBe(200);
+    // 12 queued hours justifies 1.50x, so a decayed 1.20x is lifted back to it.
+    expect(decayOneHour(120, 12)).toBe(150);
   });
 
   it("applies no decay over zero hours", () => {
@@ -122,18 +123,18 @@ describe("decay", () => {
 
 describe("totals", () => {
   it.each(DURATION_HOURS)("prices %ih as the ask times the hours", (hours) => {
-    const q = quote(1, hours, 167);
-    expect(q.askHrCents).toBe(835);
-    expect(q.totalCents).toBe(835 * hours);
+    const q = quote(1, hours, 150);
+    expect(q.askHrCents).toBe(750);
+    expect(q.totalCents).toBe(750 * hours);
   });
 
   // No volume discount and no duration premium: six hours costs exactly six
   // times one hour. A discount would reward the squatting this model exists to
   // prevent, and would break the chart by moving price independently of demand.
   it("is exactly linear in hours", () => {
-    const oneHour = quote(1, 1, 167).totalCents;
+    const oneHour = quote(1, 1, 150).totalCents;
     for (const hours of DURATION_HOURS) {
-      expect(quote(1, hours, 167).totalCents).toBe(oneHour * hours);
+      expect(quote(1, hours, 150).totalCents).toBe(oneHour * hours);
     }
   });
 
@@ -166,9 +167,9 @@ describe("locked prices", () => {
   // an argument precisely so a stored rate can be re-rendered unchanged.
   it("re-renders a stored rate regardless of what the queue does later", () => {
     const atPurchase = quoteForQueue(1, 3, 6);
-    expect(atPurchase.multiplierCm).toBe(133);
+    expect(atPurchase.multiplierCm).toBe(125);
 
-    const queueGrows = surgeFromQueuedHours(18);
+    const queueGrows = surgeFromQueuedHours(QUEUE_CAP_HOURS);
     expect(queueGrows).toBe(200);
 
     const rerendered = quote(1, 3, atPurchase.multiplierCm);
@@ -184,7 +185,7 @@ describe("locked prices", () => {
   });
 
   it("ignores a stale ask below what the queue justifies", () => {
-    const q = quoteForQueue(1, 1, 18, 120);
+    const q = quoteForQueue(1, 1, QUEUE_CAP_HOURS, 120);
     expect(q.multiplierCm).toBe(200);
   });
 });
@@ -211,14 +212,14 @@ describe("displayed strings", () => {
   });
 
   it("formats money and multipliers", () => {
-    expect(formatMoney(835)).toBe("$8.35");
-    expect(formatMultiplier(167)).toBe("1.67");
+    expect(formatMoney(750)).toBe("$7.50");
+    expect(formatMultiplier(150)).toBe("1.50");
     expect(formatMultiplier(100)).toBe("1.00");
   });
 
   // A premium is a multiplier, never a colour.
   it("expresses a premium against base", () => {
-    expect(formatMultiplierAgainstBase(167)).toBe("1.67× base");
+    expect(formatMultiplierAgainstBase(150)).toBe("1.50× base");
   });
 
   it("pads slot labels", () => {
@@ -233,14 +234,14 @@ describe("displayed strings", () => {
 
   it("states what the button does", () => {
     const q = quoteForQueue(1, 3, 12);
-    expect(actionLabel(q, false)).toBe("TAKE SLOT 01 — $25.05");
-    expect(actionLabel(q, true)).toBe("JOIN QUEUE FOR SLOT 01 — $25.05");
+    expect(actionLabel(q, false)).toBe("TAKE SLOT 01 — $22.50");
+    expect(actionLabel(q, true)).toBe("JOIN QUEUE FOR SLOT 01 — $22.50");
   });
 
   it("renders the receipt's line item and derivation", () => {
     const q = quoteForQueue(1, 3, 12);
-    expect(lineItem(q)).toBe("3H AT $8.35/HR");
-    expect(derivation(q)).toBe("$5.00 BASE × 1.67 SURGE × 3H");
+    expect(lineItem(q)).toBe("3H AT $7.50/HR");
+    expect(derivation(q)).toBe("$5.00 BASE × 1.50 SURGE × 3H");
   });
 
   /**

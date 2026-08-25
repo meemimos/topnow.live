@@ -99,13 +99,18 @@ async function queuedHours(slot: Slot): Promise<number> {
   return r._sum.durationH ?? 0;
 }
 
-/** Buys into a slot at the live ask, exactly as #26's webhook will. */
+/**
+ * Buys into a slot at the live ask, through the same cap-enforced path #26's
+ * webhook will use. Nothing here writes a row directly, so every scenario is
+ * subject to the real rules rather than a convenient shortcut.
+ */
 async function buy(slot: Slot, durationH: Duration, handle: string, at: Date) {
+  const { createQueuedPurchase } = await import("../src/lib/purchase/queue");
   const qh = await queuedHours(slot);
   const q = quoteForQueue(slot, durationH, qh);
 
-  const row = await db.purchase.create({
-    data: {
+  const row = await createQueuedPurchase(
+    {
       slot,
       durationH,
       handle,
@@ -114,10 +119,12 @@ async function buy(slot: Slot, durationH: Duration, handle: string, at: Date) {
       tagline: "tagline",
       priceHrCents: q.askHrCents,
       totalPaidCents: q.totalCents,
-      boughtAt: at,
-      status: "queued",
     },
-  });
+    at,
+  );
+
+  // boughtAt defaults to insert time; the scenarios need it deterministic.
+  await db.purchase.update({ where: { id: row.id }, data: { boughtAt: at } });
 
   return { row, quote: q, queuedHoursBefore: qh };
 }
@@ -258,64 +265,61 @@ async function scenarioCap() {
   );
   await reset();
 
-  const { createQueuedPurchase, QueueAtCapacityError, slotCapacity } =
+  const { QueueAtCapacityError, slotCapacity, waitHoursForSlot } =
     await import("../src/lib/purchase/queue");
 
   const t = T0;
-  console.log("\n    ATTEMPT              BOOKS   QUEUED BEFORE   RESULT");
+  // Someone is already on the board, so the wait a buyer inherits is not merely
+  // what is queued. That distinction is what this scenario exists to show.
+  await buy(1, 12, "on_the_board", t);
+  await promote(t);
+
+  console.log(`\n  @on_the_board is live on slot 01 for 12h. The cap is on the WAIT, so`);
+  console.log(`  those 12 hours count against everyone queueing behind them.\n`);
+  console.log("    ATTEMPT              BOOKS   WAIT BEFORE   RESULT");
   console.log("    " + "─".repeat(70));
 
   const attempts: Array<[string, Duration]> = [
-    ["early_bird", 12],
-    ["second_wave", 6],
+    ["early_bird", 6],
+    ["second_wave", 3],
     ["third_wave", 3],
     ["too_late", 6],
     ["also_too_late", 1],
   ];
 
   for (const [handle, dur] of attempts) {
-    const before = await queuedHours(1);
-    const q = quoteForQueue(1, dur, before);
+    const before = await waitHoursForSlot(db, 1, t);
+    const q = quoteForQueue(1, dur, await queuedHours(1));
     try {
-      await createQueuedPurchase({
-        slot: 1,
-        durationH: dur,
-        handle,
-        platform: "github",
-        targetUrl: `https://github.com/${handle}`,
-        tagline: "tagline",
-        priceHrCents: q.askHrCents,
-        totalPaidCents: q.totalCents,
-      });
+      await buy(1, dur, handle, t);
       console.log(
-        `    @${handle.padEnd(17)} ${String(dur).padStart(2)}h   ${String(before).padStart(9)}h   ` +
+        `    @${handle.padEnd(17)} ${String(dur).padStart(2)}h   ${before.toFixed(1).padStart(9)}h   ` +
           `accepted at ${formatMultiplier(q.multiplierCm)}× — ${formatMoney(q.totalCents)}`,
       );
     } catch (error) {
       if (!(error instanceof QueueAtCapacityError)) throw error;
       console.log(
-        `    @${handle.padEnd(17)} ${String(dur).padStart(2)}h   ${String(before).padStart(9)}h   ` +
-          `REFUSED — slot is full`,
+        `    @${handle.padEnd(17)} ${String(dur).padStart(2)}h   ${before.toFixed(1).padStart(9)}h   ` +
+          `REFUSED — wait is past the ${QUEUE_CAP_HOURS}h cap`,
       );
     }
   }
 
-  const cap = await slotCapacity(db, 1, [1, 3, 6, 12, 24]);
+  const cap = await slotCapacity(db, 1, [1, 3, 6, 12, 24], t);
   console.log(`\n  What slot 01 now looks like to a would-be buyer:\n`);
-  console.log(`    queued hours ......... ${cap.queuedHours}h`);
+  console.log(`    on the board ......... ${cap.liveRemainingHours.toFixed(1)}h left`);
+  console.log(`    queued behind it ..... ${cap.queuedHours}h`);
+  console.log(`    total wait ........... ${cap.waitHours.toFixed(1)}h`);
   console.log(`    accepting bookings ... ${cap.atCapacity ? "no" : "yes"}`);
-  console.log(`    surge ................ ${formatMultiplier(cap.multiplierCm)}× (at the ceiling)`);
   console.log(
-    `    next opens ........... in roughly ${cap.queuedHours - QUEUE_CAP_HOURS}h, once it drains under the cap`,
+    `    surge ................ ${formatMultiplier(cap.multiplierCm)}× (priced on the ${cap.queuedHours}h queued)`,
   );
   console.log(
     `\n  Slots 02 and 03 are unaffected — ${formatMoney(quoteForQueue(2, 3, 0).totalCents)} and ` +
       `${formatMoney(quoteForQueue(3, 3, 0).totalCents)} for 3h, both at base.`,
   );
-  console.log(`\n  Note: @too_late booked 6h when 21h were already queued. Nobody in this queue`);
-  console.log(
-    `  ever joined a wait longer than ${QUEUE_CAP_HOURS}h — @third_wave joined at 18h and was the last in.`,
-  );
+  console.log(`\n  Before the cap counted the rental already on the board, everyone above would`);
+  console.log(`  have been admitted — the last of them to a wait of ${cap.waitHours.toFixed(1)}h.`);
 }
 
 // ───────────────────────────────────────────────────────────────────────────

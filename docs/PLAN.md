@@ -130,7 +130,7 @@ Consequences to carry through:
 - #24's cap is no longer an independent constant; it _is_ `QUEUE_CAP_HOURS`.
 - #14's "how surge moves" copy must describe queued hours. The prototype's wording assumes
   head count and needs rewriting.
-- Maximum wait at the point of joining is bounded at 18 hours, and that is the number stated
+- Maximum wait at the point of joining is bounded at 24 hours, and that is the number stated
   in the pricing dialog.
 
 ### D3. Launch-day chart — RESOLVED: hold behind a flag until 20h of trading
@@ -154,7 +154,10 @@ Registered against the build prompt's "Things I want you to push back on":
 
 1. **A scheduled job is the wrong mechanism for expiry.** Liveness should be _derived_ from
    timestamps at read time, not written by a cron. See issue #1.
-2. **The chart may not have enough data to be meaningful.** Three slots produce single-digit
-   prints a day. See issues #12 and #13.
+2. **The chart may not have enough data to be meaningful — now measured, not speculated.**
+   A simulated realistic first week (13 purchases across three slots) left every slot **0% of
+   the week above base**: purchases go live immediately rather than queueing, so surge never
+   fires and the chart is three flat lines. Raised with @meemimos, who chose to build #12 as
+   specified anyway. Revisit once there is real traffic to judge.
 3. **Decay has nothing to decay** if surge is a pure function of the current queue. The ask
    needs memory for decay to mean anything. See issue #2.

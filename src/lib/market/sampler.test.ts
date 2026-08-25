@@ -121,9 +121,9 @@ describe("hourly sampling", () => {
     await sampleAsks(NOW);
     const slot1 = await db.askSample.findFirstOrThrow({ where: { slot: 1 } });
 
-    // 12 queued hours -> 1.67x -> $8.35, the prototype's own queue depth.
+    // 12 queued hours -> 1.50x -> $7.50, the prototype's own queue depth.
     expect(slot1.queuedHours).toBe(12);
-    expect(slot1.askHrCents).toBe(835);
+    expect(slot1.askHrCents).toBe(750);
   });
 
   /**
@@ -154,8 +154,8 @@ describe("hourly sampling", () => {
 
 describe("decay", () => {
   it("carries the previous hour's ask forward, bleeding toward base", async () => {
-    // An hour at full surge.
-    for (let i = 0; i < 6; i += 1) {
+    // An hour at full surge: 24 queued hours reaches the 2.00x ceiling.
+    for (let i = 0; i < 8; i += 1) {
       await db.purchase.create({
         data: row({
           slot: 1,
@@ -182,7 +182,7 @@ describe("decay", () => {
   });
 
   it("converges to base over enough unsold hours, and stops there", async () => {
-    for (let i = 0; i < 6; i += 1) {
+    for (let i = 0; i < 8; i += 1) {
       await db.purchase.create({
         data: row({
           slot: 3,
