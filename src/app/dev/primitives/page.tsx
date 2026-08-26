@@ -1,8 +1,11 @@
 import type { Metadata } from "next";
 
+import { CompactMeter, Meter } from "@/components/board/meter";
+import { ServerClockProvider } from "@/components/clock/provider";
 import { BevelButton } from "@/components/ui/bevel-button";
 import { actionLabel, derivation, formatMoney, lineItem } from "@/lib/pricing/format";
 import { quoteForQueue } from "@/lib/pricing";
+import { serverNow } from "@/lib/time/server";
 import { Plate, VacantPlate } from "@/components/ui/plate";
 import { TitleBar } from "@/components/ui/title-bar";
 
@@ -10,6 +13,10 @@ export const metadata: Metadata = {
   title: "Primitives — TopNow",
   robots: { index: false, follow: false },
 };
+
+// The meter below is measured from the server's clock at request time. Left
+// static, Date.now() would be frozen at build time and the demo would drift.
+export const dynamic = "force-dynamic";
 
 /**
  * Kitchen sink for #4. Every primitive in every state, so a change to the token
@@ -103,6 +110,11 @@ export default function PrimitivesPage() {
   // 12 queued hours is the prototype's own queue depth on slot 01.
   const sample = quoteForQueue(1, 3, 12);
   const sampleAction = actionLabel(sample, false);
+
+  // A live meter needs a real window. Two hours and change into a six-hour
+  // rental, measured from the server's clock like every countdown in the app.
+  const now = serverNow();
+  const sampleEndsAt = new Date(now + 2 * 3_600_000 + 47 * 60_000 + 12_000);
 
   return (
     <main className="mx-auto flex max-w-[1020px] flex-col px-2 py-3">
@@ -242,16 +254,21 @@ export default function PrimitivesPage() {
       </Section>
 
       <Section title="METER" meta="AMBER IS TIME">
-        <div className="border border-ink bg-meter-ground p-3 shadow-meter">
-          <div className="font-pixel text-3xl text-meter" data-numeric>
-            02:47<span className="text-meter-bright">:12</span>
+        {/* Live, and ticking against the server clock — the real component (#7). */}
+        <ServerClockProvider serverNow={now}>
+          <div className="flex flex-wrap items-start gap-3">
+            <div className="min-w-[262px] flex-1">
+              <Meter endsAt={sampleEndsAt} durationH={6} />
+            </div>
+            <div>
+              <div className="mb-1 font-pixel text-sm font-bold">Compact — slots 02 and 03</div>
+              <CompactMeter endsAt={sampleEndsAt} />
+            </div>
           </div>
-          <div className="mt-2 h-3 border border-ink bg-meter-dim">
-            <div className="h-full w-[62%] bg-meter" />
-          </div>
-        </div>
+        </ServerClockProvider>
         <p className="mt-2 mb-0 text-md text-ink-soft">
-          A rental about to expire does not turn red. Urgency is the size of the digits.
+          A rental about to expire does not turn red. Urgency is the size of the digits. The seconds
+          tick brighter because they are the only thing moving.
         </p>
       </Section>
 

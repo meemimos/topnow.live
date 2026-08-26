@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import { quoteForQueue } from "../src/lib/pricing";
 import { actionLabel } from "../src/lib/pricing/format";
@@ -6,6 +6,21 @@ import { actionLabel } from "../src/lib/pricing/format";
 // Derived the same way the page derives it, so a pricing change cannot leave
 // these tests asserting on a stale string.
 const PRIMARY_BUTTON = actionLabel(quoteForQueue(1, 3, 12), false);
+
+/**
+ * Loads the page and waits for React to finish hydrating.
+ *
+ * The page contains client components, so hydration replaces DOM nodes shortly
+ * after load. A Playwright element handle taken before that points at a
+ * detached node afterwards, and `getComputedStyle` on a detached node returns
+ * empty strings — which reads as "the style is missing" rather than "the node
+ * moved". Every assertion below therefore queries inside `evaluate`, resolving
+ * and reading in the same tick.
+ */
+async function gotoHydrated(page: Page) {
+  await page.goto("/dev/primitives", { waitUntil: "networkidle" });
+  await page.evaluate(() => document.fonts.ready);
+}
 
 /**
  * The token layer is only useful if the values that reach the browser are the
@@ -22,13 +37,13 @@ const EXPECTED = {
 };
 
 test("the desktop is teal", async ({ page }) => {
-  await page.goto("/dev/primitives");
+  await gotoHydrated(page);
   const background = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
   expect(background).toBe(EXPECTED.ground);
 });
 
 test("nothing has a rounded corner", async ({ page }) => {
-  await page.goto("/dev/primitives");
+  await gotoHydrated(page);
   const rounded = await page.evaluate(() =>
     Array.from(document.querySelectorAll("*"))
       .filter((el) => {
@@ -42,19 +57,22 @@ test("nothing has a rounded corner", async ({ page }) => {
 });
 
 test("plates carry the 2px bevel and controls the 3px bevel", async ({ page }) => {
-  await page.goto("/dev/primitives");
+  await gotoHydrated(page);
 
-  const plateShadow = await page
-    .locator("text=raised")
-    .first()
-    .evaluate((el) => getComputedStyle(el).boxShadow);
-  expect(plateShadow).toContain("inset");
-  expect(plateShadow).toContain("-2px -2px");
+  const shadows = await page.evaluate((buttonLabel) => {
+    const read = (el: Element | null | undefined) => (el ? getComputedStyle(el).boxShadow : "");
+    const plate = Array.from(document.querySelectorAll("div")).find(
+      (d) => d.textContent?.trim() === "raised",
+    );
+    const button = Array.from(document.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === buttonLabel,
+    );
+    return { plate: read(plate), button: read(button) };
+  }, PRIMARY_BUTTON);
 
-  const buttonShadow = await page
-    .getByRole("button", { name: PRIMARY_BUTTON })
-    .evaluate((el) => getComputedStyle(el).boxShadow);
-  expect(buttonShadow).toContain("-3px -3px");
+  expect(shadows.plate).toContain("inset");
+  expect(shadows.plate).toContain("-2px -2px");
+  expect(shadows.button).toContain("-3px -3px");
 });
 
 test("Silkscreen is applied to labels and is self-hosted", async ({ page }) => {
@@ -63,12 +81,14 @@ test("Silkscreen is applied to labels and is self-hosted", async ({ page }) => {
     if (request.resourceType() === "font") fontRequests.push(request.url());
   });
 
-  await page.goto("/dev/primitives");
-  await page.evaluate(() => document.fonts.ready);
+  await gotoHydrated(page);
 
-  const family = await page
-    .getByRole("button", { name: PRIMARY_BUTTON })
-    .evaluate((el) => getComputedStyle(el).fontFamily);
+  const family = await page.evaluate((buttonLabel) => {
+    const button = Array.from(document.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === buttonLabel,
+    );
+    return button ? getComputedStyle(button).fontFamily : "";
+  }, PRIMARY_BUTTON);
   expect(family).toContain("Silkscreen");
 
   // Every font must come from this origin. A third-party font host is a
@@ -81,7 +101,7 @@ test("Silkscreen is applied to labels and is self-hosted", async ({ page }) => {
 });
 
 test("the focus ring is visible and amber", async ({ page }) => {
-  await page.goto("/dev/primitives");
+  await gotoHydrated(page);
 
   const button = page.getByRole("button", { name: PRIMARY_BUTTON });
   await button.focus();
@@ -97,7 +117,7 @@ test("the focus ring is visible and amber", async ({ page }) => {
 });
 
 test("a selected toggle reports its state to assistive tech", async ({ page }) => {
-  await page.goto("/dev/primitives");
+  await gotoHydrated(page);
   await expect(page.getByRole("button", { name: "ALL", exact: true })).toHaveAttribute(
     "aria-pressed",
     "true",
@@ -109,7 +129,7 @@ test("a selected toggle reports its state to assistive tech", async ({ page }) =
 });
 
 test("green and red appear only where the chart legend explains them", async ({ page }) => {
-  await page.goto("/dev/primitives");
+  await gotoHydrated(page);
 
   // On the kitchen sink they are shown as labelled swatches. Anywhere else in
   // the app this would be a colour-discipline violation (#4).
@@ -124,7 +144,7 @@ test("green and red appear only where the chart legend explains them", async ({ 
 });
 
 test("no horizontal scroll at any width", async ({ page }) => {
-  await page.goto("/dev/primitives");
+  await gotoHydrated(page);
   const overflows = await page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   );
