@@ -1,10 +1,12 @@
 import { expect, test } from "@playwright/test";
 
-// Proves the scaffold boots and serves at every width the fidelity pass (#5)
-// is held against. Real page assertions arrive with the board in #6.
+// Proves the app boots and serves at every width the fidelity pass (#5) is held
+// against. The board's own behaviour is covered in board.spec.ts, which needs
+// database state; this only asserts the page is there.
 test("home page renders", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "TopNow" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Rent the top spot/ })).toBeVisible();
+  await expect(page.getByRole("region", { name: "The board" })).toBeVisible();
 });
 
 test("home page does not scroll horizontally", async ({ page }) => {

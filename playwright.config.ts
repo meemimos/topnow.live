@@ -1,6 +1,13 @@
 import { existsSync } from "node:fs";
 
 import { defineConfig, devices } from "@playwright/test";
+import { config as loadEnv } from "dotenv";
+
+// Playwright runs outside the Next.js runtime, so it does not load .env files on
+// its own. board.spec.ts talks to Postgres directly and needs DATABASE_URL.
+// CI supplies these as real environment variables; locally they come from here.
+loadEnv({ path: ".env.local", quiet: true });
+loadEnv({ path: ".env", quiet: true });
 
 /**
  * Chromium is preinstalled in the dev container under PLAYWRIGHT_BROWSERS_PATH.
@@ -24,17 +31,34 @@ export default defineConfig({
     launchOptions: launch,
   },
   projects: [
-    // The three widths the visual fidelity pass (#5) is held against.
+    /**
+     * The three widths the visual fidelity pass (#5) is held against.
+     *
+     * They ignore board.spec.ts, whose tests seed a database every worker
+     * shares. Running them once per viewport would have three projects clearing
+     * and seeding concurrently, and skipping the tests is not enough — beforeAll
+     * hooks still run — so the exclusion has to be at project level.
+     */
     {
       name: "mobile-360",
+      testIgnore: /board\.spec\.ts/,
       use: { ...devices["Desktop Chrome"], viewport: { width: 360, height: 800 } },
     },
     {
       name: "tablet-768",
+      testIgnore: /board\.spec\.ts/,
       use: { ...devices["Desktop Chrome"], viewport: { width: 768, height: 1024 } },
     },
     {
       name: "desktop-1280",
+      testIgnore: /board\.spec\.ts/,
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } },
+    },
+    // Stateful board tests, run once and serially. Sets its own viewport where
+    // it needs a narrow one.
+    {
+      name: "board",
+      testMatch: /board\.spec\.ts/,
       use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } },
     },
   ],

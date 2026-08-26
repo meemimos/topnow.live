@@ -88,6 +88,8 @@
   --color-meter-stripe: #d99500; /* dark band of the depletion bar's stripe */
   --color-ridge: #8a8a8a; /* ridge border on avatar and media placeholders */
   --color-ground-shade: #004848; /* text shadow for labels sitting on the desktop */
+  --color-hatch-dark: #dcdcdc; /* diagonal hatch on avatar and media placeholders */
+  --color-hatch-light: #f0f0f0;
 
   /* --- Type ------------------------------------------------------------- */
   /* Two families, nothing else. Silkscreen for every label, numeral readout
