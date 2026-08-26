@@ -10,6 +10,8 @@ const validServerEnv = {
   // Deliberately low-entropy and self-describing: a random-looking hex string
   // here reads as a real leaked secret to a scanner, and did.
   CRON_SECRET: "cron-secret-placeholder-for-tests-not-a-real-value",
+  STRIPE_SECRET_KEY: "sk_test_placeholder_not_a_real_key",
+  STRIPE_WEBHOOK_SECRET: "whsec_placeholder_not_a_real_secret",
 } satisfies Record<string, string | undefined>;
 
 describe("server config", () => {
@@ -45,6 +47,18 @@ describe("server config", () => {
     expect(() => parseServerConfig({ ...validServerEnv, CRON_SECRET: "short" })).toThrowError(
       /CRON_SECRET/,
     );
+  });
+
+  // Placeholders let the app boot without credentials; stripeConfigured() is
+  // what stops a placeholder ever being sent to Stripe.
+  it("accepts Stripe placeholders so the app boots without credentials", () => {
+    expect(parseServerConfig(validServerEnv).STRIPE_SECRET_KEY).toContain("placeholder");
+  });
+
+  it("still requires the Stripe variables to be present", () => {
+    const { STRIPE_SECRET_KEY, ...without } = validServerEnv;
+    void STRIPE_SECRET_KEY;
+    expect(() => parseServerConfig(without)).toThrowError(/STRIPE_SECRET_KEY/);
   });
 
   it("rejects a relative APP_URL", () => {

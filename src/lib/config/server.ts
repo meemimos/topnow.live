@@ -40,7 +40,34 @@ const serverSchema = z.object({
   CRON_SECRET: z
     .string({ error: "CRON_SECRET is required" })
     .min(32, "CRON_SECRET must be at least 32 characters"),
+
+  /**
+   * Stripe (#26).
+   *
+   * Placeholders are accepted so the app boots and the whole payment path can be
+   * exercised without credentials — every test signs its own webhooks. What a
+   * placeholder cannot do is talk to Stripe, so `stripeConfigured()` below is
+   * what gates any real API call.
+   */
+  STRIPE_SECRET_KEY: z.string({ error: "STRIPE_SECRET_KEY is required" }).min(1),
+  STRIPE_WEBHOOK_SECRET: z.string({ error: "STRIPE_WEBHOOK_SECRET is required" }).min(1),
 });
+
+/** Values that exist to let the app boot, and must never reach Stripe. */
+const PLACEHOLDER_MARKER = "placeholder";
+
+/**
+ * Whether the Stripe keys are real.
+ *
+ * False while the repo is running on placeholders, which is the state until the
+ * keys are supplied as environment variables and api.stripe.com is reachable.
+ * Anything that would make a network call to Stripe checks this first and says
+ * so plainly rather than failing with an authentication error.
+ */
+export function stripeConfigured(): boolean {
+  const { STRIPE_SECRET_KEY } = serverConfig();
+  return !STRIPE_SECRET_KEY.includes(PLACEHOLDER_MARKER);
+}
 
 export type ServerConfig = z.infer<typeof serverSchema>;
 
