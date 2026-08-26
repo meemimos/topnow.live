@@ -131,8 +131,11 @@ test("a valid listing is priced by the server", async ({ page }) => {
   await page.getByText("One line of copy").locator("..").locator("input").fill("A tagline.");
   await page.getByRole("button", { name: "CONTINUE" }).click();
 
-  // The figures come back from the pricing engine, not from the form.
-  await expect(page.locator("pre")).toContainText('"askHrCents"');
+  // The receipt appears with figures from the pricing engine, not from the form.
+  // Its content is asserted in detail by receipt.spec.ts, which owns the queue
+  // state those figures depend on.
+  await expect(page.getByText("TOPNOW RECEIPT")).toBeVisible();
+  await expect(page.getByText(/H AT \$[\d.]+\/HR/)).toBeVisible();
 });
 
 test("no horizontal scroll at 360px", async ({ page }) => {

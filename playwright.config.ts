@@ -34,31 +34,43 @@ export default defineConfig({
     /**
      * The three widths the visual fidelity pass (#5) is held against.
      *
-     * They ignore board.spec.ts, whose tests seed a database every worker
-     * shares. Running them once per viewport would have three projects clearing
-     * and seeding concurrently, and skipping the tests is not enough — beforeAll
-     * hooks still run — so the exclusion has to be at project level.
+     * They ignore the specs that seed a database every worker shares. Running
+     * those once per viewport would have three projects clearing and seeding
+     * concurrently, and skipping the tests is not enough — beforeAll hooks still
+     * run — so the exclusion has to be at project level.
      */
     {
       name: "mobile-360",
-      testIgnore: /board\.spec\.ts/,
+      testIgnore: /(board|receipt)\.spec\.ts/,
       use: { ...devices["Desktop Chrome"], viewport: { width: 360, height: 800 } },
     },
     {
       name: "tablet-768",
-      testIgnore: /board\.spec\.ts/,
+      testIgnore: /(board|receipt)\.spec\.ts/,
       use: { ...devices["Desktop Chrome"], viewport: { width: 768, height: 1024 } },
     },
     {
       name: "desktop-1280",
-      testIgnore: /board\.spec\.ts/,
+      testIgnore: /(board|receipt)\.spec\.ts/,
       use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } },
     },
-    // Stateful board tests, run once and serially. Sets its own viewport where
-    // it needs a narrow one.
+    /**
+     * Stateful suites, each run once.
+     *
+     * `mode: "serial"` only orders tests within a file — two stateful files
+     * still land in different workers and clobber each other's rows. A project
+     * dependency is what actually serialises them: `receipt` does not start
+     * until `board` has finished.
+     */
     {
       name: "board",
       testMatch: /board\.spec\.ts/,
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } },
+    },
+    {
+      name: "receipt",
+      testMatch: /receipt\.spec\.ts/,
+      dependencies: ["board"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } },
     },
   ],

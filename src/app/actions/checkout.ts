@@ -2,7 +2,13 @@
 
 import { fieldErrors, parseCheckout } from "@/lib/checkout/schema";
 import { getDb } from "@/lib/db";
-import { quoteForQueue, type DurationHours, type Slot } from "@/lib/pricing";
+import {
+  QUEUE_CAP_HOURS,
+  SLOTS,
+  quoteForQueue,
+  type DurationHours,
+  type Slot,
+} from "@/lib/pricing";
 import { acceptsNewBookings, queuedHoursForSlot, waitHoursForSlot } from "@/lib/purchase/queue";
 
 /**
@@ -53,14 +59,32 @@ export async function priceCheckout(input: unknown): Promise<CheckoutResult> {
     db.purchase.count({ where: { slot, status: "queued" } }),
   ]);
 
-  // Refused before payment is taken, never after (#24).
+  // Refused before payment is taken, never after (#24). A full slot is a state
+  // the buyer gets explained (#10), not an unexplained disabled button, so the
+  // message says when it next opens and what else is available.
   if (!acceptsNewBookings(waitHours)) {
+    const opensIn = Math.ceil(waitHours - QUEUE_CAP_HOURS);
+    const alternatives = (
+      await Promise.all(
+        SLOTS.filter((other) => other !== slot).map(async (other) => ({
+          slot: other,
+          wait: await waitHoursForSlot(db, other, now),
+        })),
+      )
+    )
+      .filter((other) => acceptsNewBookings(other.wait))
+      .map((other) => `slot ${String(other.slot).padStart(2, "0")}`);
+
     return {
       ok: false,
       errors: {
         form:
-          `Slot ${String(slot).padStart(2, "0")} is full — the wait is already past the cap. ` +
-          `Try another slot.`,
+          `Slot ${String(slot).padStart(2, "0")} is full. The wait is already ` +
+          `${Math.round(waitHours)}h, past the ${QUEUE_CAP_HOURS}h cap, so it is not taking ` +
+          `bookings for about another ${opensIn}h. ` +
+          (alternatives.length > 0
+            ? `${alternatives.join(" and ")} ${alternatives.length === 1 ? "is" : "are"} open now.`
+            : `The other slots are full too — try again shortly.`),
       },
     };
   }

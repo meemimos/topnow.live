@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import type { CheckoutQuote } from "@/app/actions/checkout";
 import { CheckoutForm } from "@/components/checkout/form";
+import { Receipt } from "@/components/checkout/receipt";
 
 /**
  * Holds the quote the form produces.
@@ -21,12 +22,7 @@ export function CheckoutFlow() {
       </div>
       <div className="min-w-[260px] flex-[1_1_300px]">
         {quote ? (
-          // Placeholder until #9's receipt panel lands. Shows the real figures
-          // the server priced, so nothing here is invented.
-          <div className="bg-paper p-3">
-            <div className="text-sm font-pixel font-bold">QUOTED</div>
-            <pre className="text-md mt-2 overflow-x-auto">{JSON.stringify(quote, null, 2)}</pre>
-          </div>
+          <Receipt quote={quote} />
         ) : (
           <div className="text-md bg-paper p-3 text-ink-soft">
             Fill in the listing and the receipt appears here.
