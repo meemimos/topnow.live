@@ -1,0 +1,12 @@
+# Known findings accepted by fingerprint.
+#
+# A fingerprint pins one finding, in one file, at one commit. Anything new — the
+# same value somewhere else, or a different value here — still fails the scan.
+# That is the point: this is not a mute button.
+#
+# 2969af3 added a test fixture for CRON_SECRET as a random-looking hex string,
+# which is indistinguishable from a real leaked key to a scanner. The value was
+# never a credential; it existed only so the config test had something 32
+# characters long to parse. HEAD replaces it with a self-describing placeholder,
+# but the commit stays in the branch's history and gitleaks scans history.
+2969af30ce2cf570b0293d58e101e572205fd046:src/lib/config/config.test.ts:generic-api-key:10

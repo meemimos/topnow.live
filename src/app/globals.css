@@ -1,0 +1,200 @@
+@import "tailwindcss";
+
+/* ===========================================================================
+   TopNow design tokens (#4)
+   ---------------------------------------------------------------------------
+   Every value here is measured from TopNow.html, the binding visual reference.
+   Components use these by name; a raw hex in a component fails lint.
+
+   One fixed palette. No dark mode — the teal desktop, the silver plates and the
+   amber meter are the design, not a light-mode variant of it.
+   =========================================================================== */
+
+@font-face {
+  font-family: "Silkscreen";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/silkscreen-400-latin.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Silkscreen";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/silkscreen-400-latin-ext.woff2") format("woff2");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
+    U+A720-A7FF;
+}
+@font-face {
+  font-family: "Silkscreen";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/silkscreen-700-latin.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Silkscreen";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/silkscreen-700-latin-ext.woff2") format("woff2");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
+    U+A720-A7FF;
+}
+
+@theme {
+  /* --- Palette: from the build prompt's token table ---------------------- */
+  --color-ground: #008080; /* page background — the desktop */
+  --color-plate: #c6c6c6; /* panel chrome */
+  --color-plate-light: #ffffff; /* bevel highlight */
+  --color-plate-dark: #7b7b7b; /* bevel shadow */
+  --color-well: #e6e6e6; /* inset strips, table headers */
+  --color-paper: #ffffff; /* content surfaces */
+  --color-ink: #000000; /* text, all borders */
+  --color-navy: #000080; /* title bars, primary buttons, sale markers */
+  --color-navy-light: #5b5bd6; /* navy bevel highlight */
+  --color-navy-dark: #00003f; /* navy bevel shadow */
+  --color-note: #ffffcc; /* callouts, live rows, highlighted values */
+  --color-meter: #ffb000; /* all time and meter readouts */
+  --color-meter-bright: #ffd166; /* ticking seconds */
+
+  /* Chart only. Green and red mean price direction and nothing else. */
+  --color-up: #00a000;
+  --color-down: #c40000;
+
+  /* --- Palette: measured from the prototype, absent from the prompt ------ */
+  --color-rule: #808080; /* hairline in wells and table cells (48 uses) */
+  --color-ink-soft: #555555; /* secondary / helper prose (21 uses) */
+  --color-ink-faint: #9c9c9c; /* tertiary, disabled (6 uses) */
+  --color-well-alt: #ededed; /* alternating table row (8 uses) */
+  --color-navy-ink: #b9c8ff; /* meta text on navy title bars (8 uses) */
+  --color-meter-dim: #7a5400; /* unlit meter segment */
+  --color-meter-ground: #0a0a0a; /* meter panel interior — not pure ink */
+  --color-meter-bezel: #4a4a4a; /* meter panel inner bevel */
+  --color-counter-bezel: #303030; /* hit counter inner bevel */
+  --color-ink-plate: #1c1c1c; /* surge plate */
+  --color-vacant: #d7d7d7; /* empty-slot panel behind the dashed border */
+
+  /* --- Type ------------------------------------------------------------- */
+  /* Two families, nothing else. Silkscreen for every label, numeral readout
+     and button; Verdana for prose. */
+  --font-pixel: "Silkscreen", "Courier New", monospace;
+  --font-sans: Verdana, Geneva, Tahoma, sans-serif;
+
+  /* The prototype's scale. 8-13px carries almost everything. */
+  --text-2xs: 8px;
+  --text-xs: 9px;
+  --text-sm: 10px;
+  --text-base: 11px;
+  --text-md: 12px;
+  --text-lg: 13px;
+  --text-xl: 14px;
+  --text-2xl: 17px;
+  --text-3xl: 26px;
+
+  /* --- Radius ----------------------------------------------------------- */
+  --radius: 0px;
+
+  /* --- Bevels ----------------------------------------------------------- */
+  /* Plates are 2px, controls are 3px. The build prompt specifies 3px for both;
+     the prototype uses 2px on plates (15 uses) and 3px on buttons and navy
+     controls (9 uses). Following the prototype, which is binding for visuals. */
+  --shadow-plate:
+    inset -2px -2px 0 var(--color-plate-dark), inset 2px 2px 0 var(--color-plate-light);
+  --shadow-plate-inset:
+    inset 2px 2px 0 var(--color-plate-dark), inset -2px -2px 0 var(--color-plate-light);
+  --shadow-well: inset 2px 2px 0 var(--color-plate-dark);
+  --shadow-control:
+    inset -3px -3px 0 var(--color-plate-dark), inset 3px 3px 0 var(--color-plate-light);
+  --shadow-control-pressed:
+    inset 3px 3px 0 var(--color-plate-dark), inset -3px -3px 0 var(--color-plate-light);
+  --shadow-control-navy:
+    inset -3px -3px 0 var(--color-navy-dark), inset 3px 3px 0 var(--color-navy-light);
+  --shadow-control-navy-pressed:
+    inset 3px 3px 0 var(--color-navy-dark), inset -3px -3px 0 var(--color-navy-light);
+  /* Modals and anything that floats above the desktop. */
+  --shadow-float:
+    inset -2px -2px 0 var(--color-plate-dark), inset 2px 2px 0 var(--color-plate-light),
+    4px 4px 0 rgb(0 0 0 / 0.4);
+  --shadow-meter: inset 2px 2px 0 var(--color-meter-bezel);
+  --shadow-counter: inset 1px 1px 0 var(--color-counter-bezel);
+}
+
+/* ===========================================================================
+   Base
+   =========================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  border-radius: 0;
+}
+
+body {
+  margin: 0;
+  background: var(--color-ground);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
+
+a {
+  color: #0000ee;
+  text-decoration: underline;
+}
+a:visited {
+  color: #551a8b;
+}
+a:hover {
+  color: #ee0000;
+}
+
+/* Amber, not navy. The build prompt says navy focus rings, but the prototype
+   uses amber — and navy-on-navy is invisible on the primary buttons, which are
+   the controls that most need a visible ring. */
+:focus-visible {
+  outline: 3px solid var(--color-meter);
+  outline-offset: 1px;
+}
+
+/* Every number that changes. */
+[data-numeric],
+input,
+table {
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes tn-blink {
+  0%,
+  55% {
+    opacity: 1;
+  }
+  56%,
+  100% {
+    opacity: 0.1;
+  }
+}
+
+/* Clocks still tick — that is #3 and #7, driven by state, not animation.
+   Everything else holds still. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
