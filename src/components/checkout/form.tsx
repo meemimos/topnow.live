@@ -5,6 +5,7 @@ import { useMemo, useState, useTransition } from "react";
 import { priceCheckout, type CheckoutQuote } from "@/app/actions/checkout";
 import { BevelButton } from "@/components/ui/bevel-button";
 import { Plate } from "@/components/ui/plate";
+import type { CheckoutInput } from "@/lib/checkout/schema";
 import {
   DISPLAY_NAME_MAX,
   HANDLE_RULES,
@@ -24,7 +25,9 @@ import { cn } from "@/lib/utils";
  * validation hole and an abuse vector (#17).
  *
  * The receipt (#9) and the queue position (#10) render from the quote this
- * returns; payment is #26.
+ * returns. The listing that produced the quote is handed up alongside it: #26
+ * re-prices it on the server when the buyer takes the slot, so the figure sent
+ * to Stripe is never one the browser could have edited in between.
  */
 
 const PLATFORM_OPTIONS = [
@@ -65,7 +68,10 @@ function Counter({ value, max }: { value: string; max: number }) {
   );
 }
 
-export function CheckoutForm({ onQuote }: { onQuote?: (quote: CheckoutQuote | null) => void }) {
+/** What the form hands upward once a listing prices cleanly. */
+export type PricedListing = { quote: CheckoutQuote; input: CheckoutInput };
+
+export function CheckoutForm({ onQuote }: { onQuote?: (priced: PricedListing | null) => void }) {
   const [slot, setSlot] = useState<Slot>(1);
   const [durationIndex, setDurationIndex] = useState(1);
   const [platform, setPlatform] = useState<PlatformValue>("github");
@@ -87,15 +93,16 @@ export function CheckoutForm({ onQuote }: { onQuote?: (quote: CheckoutQuote | nu
   }, [isWebsite, platform, handle]);
 
   function submit() {
-    const payload = isWebsite
-      ? { slot, durationH: duration.hours, platform, displayName, url, tagline }
-      : { slot, durationH: duration.hours, platform, handle, tagline };
+    const payload: CheckoutInput =
+      platform === "web"
+        ? { slot, durationH: duration.hours, platform, displayName, url, tagline }
+        : { slot, durationH: duration.hours, platform, handle, tagline };
 
     startTransition(async () => {
       const result = await priceCheckout(payload);
       if (result.ok) {
         setErrors({});
-        onQuote?.(result.quote);
+        onQuote?.({ quote: result.quote, input: payload });
       } else {
         setErrors(result.errors);
         onQuote?.(null);

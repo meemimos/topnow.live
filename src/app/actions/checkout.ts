@@ -1,6 +1,8 @@
 "use server";
 
 import { fieldErrors, parseCheckout } from "@/lib/checkout/schema";
+import { serverConfig, stripeConfigured } from "@/lib/config/server";
+import { liveGateway } from "@/lib/payments/stripe";
 import { getDb } from "@/lib/db";
 import {
   QUEUE_CAP_HOURS,
@@ -40,6 +42,9 @@ export type CheckoutQuote = {
 
 export type CheckoutResult =
   { ok: true; quote: CheckoutQuote } | { ok: false; errors: Record<string, string> };
+
+export type StartPaymentResult =
+  { ok: true; url: string } | { ok: false; errors: Record<string, string> };
 
 export async function priceCheckout(input: unknown): Promise<CheckoutResult> {
   const parsed = parseCheckout(input);
@@ -105,4 +110,59 @@ export async function priceCheckout(input: unknown): Promise<CheckoutResult> {
       immediate: waitHours === 0,
     },
   };
+}
+
+/**
+ * Starts a Stripe Checkout session (#26).
+ *
+ * The price is computed here and locked into the session metadata. Between now
+ * and the webhook the queue may move; the buyer pays what they were quoted, and
+ * the webhook writes that figure rather than recomputing it.
+ *
+ * No purchase row is created. That happens only when payment clears.
+ */
+export async function startPayment(input: unknown): Promise<StartPaymentResult> {
+  const priced = await priceCheckout(input);
+  if (!priced.ok) return priced;
+
+  if (!stripeConfigured()) {
+    return {
+      ok: false,
+      errors: {
+        form:
+          "Payments are not configured in this environment. The listing validated and " +
+          "priced correctly; set real Stripe keys to take payment.",
+      },
+    };
+  }
+
+  const parsed = parseCheckout(input);
+  if (!parsed.success) return { ok: false, errors: fieldErrors(parsed.error) };
+
+  const { quote } = priced;
+  const { APP_URL } = serverConfig();
+
+  const session = await liveGateway.createCheckoutSession({
+    totalCents: quote.totalCents,
+    description: `TopNow slot ${String(quote.slot).padStart(2, "0")} — ${quote.durationH}h`,
+    successUrl: `${APP_URL}/?paid=1`,
+    cancelUrl: `${APP_URL}/checkout`,
+    metadata: {
+      slot: String(quote.slot),
+      durationH: String(quote.durationH),
+      handle: parsed.data.handle,
+      platform: parsed.data.platform,
+      displayName: parsed.data.displayName ?? "",
+      targetUrl: parsed.data.targetUrl,
+      tagline: parsed.data.tagline,
+      // Locked. The webhook writes these rather than re-pricing.
+      priceHrCents: String(quote.askHrCents),
+      totalPaidCents: String(quote.totalCents),
+    },
+  });
+
+  if (!session.url) {
+    return { ok: false, errors: { form: "Stripe did not return a checkout URL." } };
+  }
+  return { ok: true, url: session.url };
 }
