@@ -20,6 +20,12 @@ env:
   STRIPE_SECRET_KEY: sk_test_placeholder_not_a_real_key
   STRIPE_WEBHOOK_SECRET: whsec_placeholder_not_a_real_secret
   NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: pk_test_placeholder_not_a_real_key
+  # Decision D3 holds the market panel behind this flag in production until a
+  # slot has 20h of real sampled ask. CI is where the panel gets tested, so it
+  # is on here — #13's sparse and flat states have no coverage otherwise. The
+  # value is inlined at build time, so it has to be set for the build step too,
+  # which is why it lives at workflow level rather than on one step.
+  NEXT_PUBLIC_MARKET_PANEL_ENABLED: "true"
 
 jobs:
   verify:

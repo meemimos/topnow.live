@@ -1,7 +1,10 @@
 import { Board } from "@/components/board/board";
 import { ServerClockProvider } from "@/components/clock/provider";
 import { LedgerTable } from "@/components/ledger/ledger";
+import { MarketPanel } from "@/components/market/market";
 import { BevelButton } from "@/components/ui/bevel-button";
+import { clientConfig } from "@/lib/config/client";
+import { readMarket } from "@/lib/market/read";
 import { currentBoard, readLedger } from "@/lib/purchase/state";
 import { serverNow } from "@/lib/time/server";
 
@@ -16,6 +19,12 @@ export default async function Home() {
   // surfaces cannot disagree about who is on the board.
   const slots = await currentBoard(new Date(now));
   const ledger = await readLedger(new Date(now));
+
+  // Decision D3: the market panel is absent until a slot has real trading
+  // behind it. The flag is what reveals it — and #13's sparse state is what it
+  // reveals into, not a placeholder for it.
+  const showMarket = clientConfig.NEXT_PUBLIC_MARKET_PANEL_ENABLED;
+  const market = showMarket ? await readMarket(new Date(now)) : null;
 
   return (
     <ServerClockProvider serverNow={now}>
@@ -37,6 +46,7 @@ export default async function Home() {
         </header>
 
         <Board slots={slots} now={now} />
+        {market && <MarketPanel market={market} now={now} />}
         <LedgerTable ledger={ledger} />
       </main>
     </ServerClockProvider>

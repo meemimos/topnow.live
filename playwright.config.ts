@@ -41,17 +41,17 @@ export default defineConfig({
      */
     {
       name: "mobile-360",
-      testIgnore: /(board|receipt|ledger)\.spec\.ts/,
+      testIgnore: /(board|receipt|ledger|market)\.spec\.ts/,
       use: { ...devices["Desktop Chrome"], viewport: { width: 360, height: 800 } },
     },
     {
       name: "tablet-768",
-      testIgnore: /(board|receipt|ledger)\.spec\.ts/,
+      testIgnore: /(board|receipt|ledger|market)\.spec\.ts/,
       use: { ...devices["Desktop Chrome"], viewport: { width: 768, height: 1024 } },
     },
     {
       name: "desktop-1280",
-      testIgnore: /(board|receipt|ledger)\.spec\.ts/,
+      testIgnore: /(board|receipt|ledger|market)\.spec\.ts/,
       use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } },
     },
     /**
@@ -77,6 +77,12 @@ export default defineConfig({
       name: "ledger",
       testMatch: /ledger\.spec\.ts/,
       dependencies: ["receipt"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } },
+    },
+    {
+      name: "market",
+      testMatch: /market\.spec\.ts/,
+      dependencies: ["ledger"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } },
     },
   ],
