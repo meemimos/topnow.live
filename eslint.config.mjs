@@ -13,8 +13,13 @@ import prettier from "eslint-config-prettier";
  */
 
 // #4: no component may declare a raw hex colour. Tokens only.
+//
+// The trailing guard is a negative lookahead rather than \b: Tailwind escapes
+// spaces in arbitrary values as underscores, so "#dcdcdc_0_5px" put a word
+// character straight after the hex run and \b quietly failed to match. That
+// hole let raw hex into an arbitrary-value gradient before it was noticed.
 const NO_RAW_HEX = {
-  selector: "Literal[value=/#[0-9a-fA-F]{3,8}\\b/]",
+  selector: "Literal[value=/#[0-9a-fA-F]{3,8}(?![0-9a-fA-F])/]",
   message: "Raw hex colour. Use a design token from the Tailwind theme instead (see #4).",
 };
 

@@ -15,6 +15,11 @@ env:
   # Not a secret: a throwaway value so boot validation passes in CI. The real
   # one is generated per environment (#22, #23).
   CRON_SECRET: ci-only-placeholder-at-least-thirty-two-chars
+  # Placeholders, not secrets. CI exercises the whole payment path by signing its
+  # own webhooks; nothing here talks to Stripe.
+  STRIPE_SECRET_KEY: sk_test_placeholder_not_a_real_key
+  STRIPE_WEBHOOK_SECRET: whsec_placeholder_not_a_real_secret
+  NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: pk_test_placeholder_not_a_real_key
 
 jobs:
   verify:

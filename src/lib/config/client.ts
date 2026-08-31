@@ -13,6 +13,10 @@ import { z } from "zod";
  */
 
 const clientSchema = z.object({
+  // Not a secret: Stripe publishable keys are designed to ship in the browser
+  // bundle. The secret key lives in ./server.ts and never comes near here.
+  NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: z.string().default(""),
+
   // Decision D3: the market panel stays hidden until a slot has 20h of sampled
   // ask (#22). This flag is what #12 gates the panel on.
   NEXT_PUBLIC_MARKET_PANEL_ENABLED: z
@@ -25,6 +29,7 @@ export type ClientConfig = z.infer<typeof clientSchema>;
 
 const rawClientEnv = {
   NEXT_PUBLIC_MARKET_PANEL_ENABLED: process.env.NEXT_PUBLIC_MARKET_PANEL_ENABLED,
+  NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
 };
 
 export function parseClientConfig(source: Record<string, string | undefined>): ClientConfig {

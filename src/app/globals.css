@@ -83,8 +83,13 @@
   --color-meter-ground: #0a0a0a; /* meter panel interior — not pure ink */
   --color-meter-bezel: #4a4a4a; /* meter panel inner bevel */
   --color-counter-bezel: #303030; /* hit counter inner bevel */
-  --color-ink-plate: #1c1c1c; /* surge plate */
+  --color-ink-plate: #1c1c1c; /* surge plate, depletion-bar track */
   --color-vacant: #d7d7d7; /* empty-slot panel behind the dashed border */
+  --color-meter-stripe: #d99500; /* dark band of the depletion bar's stripe */
+  --color-ridge: #8a8a8a; /* ridge border on avatar and media placeholders */
+  --color-ground-shade: #004848; /* text shadow for labels sitting on the desktop */
+  --color-hatch-dark: #dcdcdc; /* diagonal hatch on avatar and media placeholders */
+  --color-hatch-light: #f0f0f0;
 
   /* --- Type ------------------------------------------------------------- */
   /* Two families, nothing else. Silkscreen for every label, numeral readout
