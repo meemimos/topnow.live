@@ -1,7 +1,8 @@
 import { Board } from "@/components/board/board";
 import { ServerClockProvider } from "@/components/clock/provider";
+import { LedgerTable } from "@/components/ledger/ledger";
 import { BevelButton } from "@/components/ui/bevel-button";
-import { currentBoard } from "@/lib/purchase/state";
+import { currentBoard, readLedger } from "@/lib/purchase/state";
 import { serverNow } from "@/lib/time/server";
 
 // The board changes every second and reflects live state, so it is never
@@ -10,7 +11,11 @@ export const dynamic = "force-dynamic";
 
 export default async function Home() {
   const now = serverNow();
+  // The board read promotes; the ledger read must see the result of that, so it
+  // runs after rather than alongside. Both are given the same `now`, so the two
+  // surfaces cannot disagree about who is on the board.
   const slots = await currentBoard(new Date(now));
+  const ledger = await readLedger(new Date(now));
 
   return (
     <ServerClockProvider serverNow={now}>
@@ -32,6 +37,7 @@ export default async function Home() {
         </header>
 
         <Board slots={slots} now={now} />
+        <LedgerTable ledger={ledger} />
       </main>
     </ServerClockProvider>
   );

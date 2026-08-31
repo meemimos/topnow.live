@@ -3,6 +3,7 @@ import { Prisma, type Purchase, type PurchaseStatus } from "@prisma/client";
 import { getDb } from "@/lib/db";
 import { SLOTS, type Slot } from "@/lib/pricing";
 
+import { buildLedger, type Ledger } from "./ledger";
 import { inSerializableTransaction } from "./queue";
 
 /**
@@ -290,4 +291,20 @@ export async function killPurchase(
 
     return { killed, promoted };
   });
+}
+
+/**
+ * The ledger (#11): every purchase, in one query, partitioned into three sections.
+ *
+ * One read rather than three, because three could disagree — a rental promoted
+ * between the live query and the queued one would show up in both sections, or
+ * in neither.
+ *
+ * Deliberately does not promote. `currentBoard` owns promotion, so a page
+ * rendering both surfaces would otherwise run it twice; and the ledger is correct
+ * without it, because liveness comes from the window rather than from `status`.
+ */
+export async function readLedger(now: Date = new Date(), limit = 200): Promise<Ledger> {
+  const rows = await getDb().purchase.findMany({ orderBy: { boughtAt: "asc" }, take: limit });
+  return buildLedger(rows, now);
 }

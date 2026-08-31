@@ -73,6 +73,17 @@ async function seedQueued(slot: Slot, durationH: DurationHours, handle: string) 
   });
 }
 
+/**
+ * The board section specifically.
+ *
+ * The ledger (#11) renders the same handles and the same totals further down the
+ * page — they are the same purchases — so an assertion that means "the board
+ * shows this" has to say so rather than matching either surface.
+ */
+function board(page: Page) {
+  return page.getByRole("region", { name: "The board" });
+}
+
 async function gotoBoard(page: Page) {
   await page.goto("/", { waitUntil: "networkidle" });
   await page.evaluate(() => document.fonts.ready);
@@ -132,7 +143,7 @@ test.describe("an occupied board", () => {
 
   test("shows the real occupants and their real taglines", async ({ page }) => {
     await gotoBoard(page);
-    await expect(page.getByText("@mira_builds")).toBeVisible();
+    await expect(board(page).getByText("@mira_builds")).toBeVisible();
     await expect(page.getByText("Weekly teardowns of shipping-label APIs.")).toBeVisible();
   });
 
@@ -186,7 +197,7 @@ test.describe("an occupied board", () => {
   test("shows what the occupant actually paid", async ({ page }) => {
     await gotoBoard(page);
     const paid = formatMoney(quoteForQueue(1, 6, 0).totalCents);
-    await expect(page.getByText(paid, { exact: true })).toBeVisible();
+    await expect(board(page).getByText(paid, { exact: true })).toBeVisible();
   });
 
   test("every CTA is keyboard reachable and visibly focused", async ({ page }) => {
