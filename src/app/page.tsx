@@ -2,9 +2,12 @@ import { Board } from "@/components/board/board";
 import { ServerClockProvider } from "@/components/clock/provider";
 import { LedgerTable } from "@/components/ledger/ledger";
 import { MarketPanel } from "@/components/market/market";
+import { PricingDialog } from "@/components/pricing/pricing-dialog";
 import { BevelButton } from "@/components/ui/bevel-button";
 import { clientConfig } from "@/lib/config/client";
 import { readMarket } from "@/lib/market/read";
+import { DURATION_HOURS, askHrCents, baseHrCents } from "@/lib/pricing";
+import { currentAsks } from "@/lib/purchase/queue";
 import { currentBoard, readLedger } from "@/lib/purchase/state";
 import { serverNow } from "@/lib/time/server";
 
@@ -26,6 +29,10 @@ export default async function Home() {
   const showMarket = clientConfig.NEXT_PUBLIC_MARKET_PANEL_ENABLED;
   const market = showMarket ? await readMarket(new Date(now)) : null;
 
+  // The pricing dialog quotes the same ask checkout would charge, read per
+  // request — a static price list beside a surging board is worse than none.
+  const asks = await currentAsks(DURATION_HOURS, new Date(now));
+
   return (
     <ServerClockProvider serverNow={now}>
       <main className="mx-auto flex max-w-[1020px] flex-col px-2 pt-2.5 pb-10">
@@ -40,8 +47,20 @@ export default async function Home() {
             hits zero the slot reopens at base price.
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
-            <BevelButton variant="navy">PAY FOR TIME</BevelButton>
-            <BevelButton>SEE PRICING</BevelButton>
+            <BevelButton variant="navy" asChild>
+              <a href="/checkout">PAY FOR TIME</a>
+            </BevelButton>
+            <PricingDialog
+              rows={asks.map((ask) => ({
+                slot: ask.slot,
+                baseHrCents: baseHrCents(ask.slot),
+                multiplierCm: ask.multiplierCm,
+                askHrCents: askHrCents(ask.slot, ask.multiplierCm),
+              }))}
+              // The legend explains the chart, so it hides with it (D3).
+              showChartLegend={showMarket}
+              trigger={<BevelButton>SEE PRICING</BevelButton>}
+            />
           </div>
         </header>
 

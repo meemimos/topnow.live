@@ -23,7 +23,6 @@ import {
 } from "@/lib/market/series";
 import { formatMoney, slotLabel } from "@/lib/pricing/format";
 import type { Slot } from "@/lib/pricing";
-import { cn } from "@/lib/utils";
 
 /**
  * The market panel (#13) — the sparse and flat states, built before the chart.
@@ -50,14 +49,15 @@ import { cn } from "@/lib/utils";
  * mean.
  */
 
-/** The ask against base, as a signed percentage. Only ever price direction. */
-function changeAgainstBase(askHrCents: number, base: number) {
-  const pct = ((askHrCents - base) / base) * 100;
-  const rounded = Math.round(pct);
-  return {
-    label: `${rounded > 0 ? "+" : ""}${rounded}%`,
-    direction: rounded > 0 ? "up" : rounded < 0 ? "down" : "flat",
-  } as const;
+/**
+ * The ask against base, as a signed percentage.
+ *
+ * The sign is the whole signal: it says which way the slot has moved without
+ * borrowing a colour to say it.
+ */
+function changeAgainstBase(askHrCents: number, base: number): string {
+  const pct = Math.round(((askHrCents - base) / base) * 100);
+  return `${pct > 0 ? "+" : ""}${pct}%`;
 }
 
 function Ticker({
@@ -85,17 +85,13 @@ function Ticker({
       <span className="text-2xl mt-[5px] block font-pixel font-bold" data-numeric>
         {formatMoney(market.askHrCents)}
       </span>
-      <span
-        className={cn(
-          "text-base mt-1 block",
-          // The only green or red on the page outside the chart, and it means
-          // price direction — nothing else may borrow these two colours.
-          !selected && change.direction === "up" && "text-up",
-          !selected && change.direction === "down" && "text-down",
-        )}
-        data-numeric
-      >
-        {change.label} vs base {formatMoney(market.baseHrCents)}
+      {/* No colour. The signed percentage already carries direction, and #14
+          makes the chart legend the only place green and red appear outside the
+          chart itself — the prototype agrees, tinting this with neither of the
+          chart's two colours. A premium is a number here, as it is everywhere
+          else in the product. */}
+      <span className="text-base mt-1 block" data-numeric>
+        {change} vs base {formatMoney(market.baseHrCents)}
       </span>
     </BevelButton>
   );

@@ -225,6 +225,12 @@ test.describe("switching slots and ranges", () => {
   test("swaps content without tearing down the controls", async ({ page }) => {
     await gotoMarket(page);
 
+    // Wait for the chart before marking anything. The chart is client-only, so
+    // its presence proves hydration has finished — and a marker stamped on the
+    // server-rendered DOM before that can be lost to hydration rather than to a
+    // remount, which is the thing this test is trying to distinguish.
+    await expect(chart(page)).toBeVisible();
+
     const range = panel(page).getByRole("button", { name: "24H", exact: true });
     await expect(range).toBeVisible();
     // Mark the live element; if the panel remounted, the marker would be gone.

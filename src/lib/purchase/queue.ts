@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { latestSampledAsk } from "@/lib/market/ask";
 import {
   QUEUE_CAP_HOURS,
+  SLOTS,
   type DurationHours,
   type Slot,
   surgeFromQueuedHours,
@@ -293,4 +294,24 @@ export async function createQueuedPurchase(purchase: NewPurchase, now: Date = ne
 
     return tx.purchase.create({ data: { ...purchase, status: "queued" } });
   });
+}
+
+/**
+ * The ask on every slot right now (#14).
+ *
+ * The same figure `slotCapacity` gives checkout, so the pricing dialog quotes
+ * what a buyer would actually be charged rather than a second, prettier number
+ * computed a different way. That includes decay: a slot bleeding back toward
+ * base after a busy spell asks more than its queue alone would justify, and the
+ * dialog has to say so or it is lying by omission.
+ *
+ * Read outside a transaction. These are three independent reads for display, and
+ * serialising them would take locks that the page has no need of.
+ */
+export async function currentAsks(
+  durations: readonly DurationHours[],
+  now: Date = new Date(),
+): Promise<SlotCapacity[]> {
+  const db = getDb();
+  return Promise.all(SLOTS.map((slot) => slotCapacity(db, slot, durations, now)));
 }
