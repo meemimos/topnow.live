@@ -2,7 +2,11 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 import { expect, test, type Page } from "@playwright/test";
 
-import { FLAT_WINDOW_CANDLES, MARKET_REVEAL_HOURS } from "../src/lib/market/constants";
+import {
+  FLAT_WINDOW_CANDLES,
+  MARKET_REVEAL_HOURS,
+  SPARKLINE_MAX_WIDTH,
+} from "../src/lib/market/constants";
 import { baseHrCents, quoteForQueue, type Slot } from "../src/lib/pricing";
 import { formatMoney } from "../src/lib/pricing/format";
 
@@ -101,6 +105,22 @@ function panel(page: Page) {
   return page.getByRole("region", { name: "The market" });
 }
 
+/** The chart element, whether it is drawn as a sparkline or in full. */
+function chart(page: Page) {
+  return panel(page).getByTestId("price-chart");
+}
+
+/**
+ * How many sampled hours the chart says it is drawing.
+ *
+ * Read off its accessible description rather than a test-only attribute, so the
+ * assertion exercises the same string a screen reader gets.
+ */
+async function sampledHoursShown(page: Page): Promise<number> {
+  const label = await chart(page).getAttribute("aria-label");
+  return Number(label!.match(/over (\d+) sampled hours/)![1]);
+}
+
 function slotTicker(page: Page, slot: Slot) {
   return panel(page).getByRole("button", { name: new RegExp(`^SLOT 0${slot},`) });
 }
@@ -151,9 +171,9 @@ test.describe("the sparse state", () => {
     }
   });
 
-  test("draws no chart region at all", async ({ page }) => {
+  test("draws no chart at all", async ({ page }) => {
     await gotoMarket(page);
-    await expect(panel(page).getByText(/SAMPLED HOURS?$/)).toHaveCount(0);
+    await expect(chart(page)).toHaveCount(0);
   });
 });
 
@@ -182,7 +202,7 @@ test.describe("the flat state", () => {
     await slotTicker(page, 3).click();
 
     await expect(panel(page).getByRole("button", { name: "24H", exact: true })).toBeVisible();
-    await expect(panel(page).getByText(/SAMPLED HOURS?$/)).toBeVisible();
+    await expect(chart(page)).toBeVisible();
     await expect(panel(page).getByText("MARKET IS STILL OPENING")).toHaveCount(0);
   });
 });
@@ -214,7 +234,7 @@ test.describe("switching slots and ranges", () => {
     await expect(panel(page).getByText("MARKET IS STILL OPENING")).toBeVisible();
 
     await slotTicker(page, 1).click();
-    await expect(panel(page).getByText(/SAMPLED HOURS?$/)).toBeVisible();
+    await expect(chart(page)).toBeVisible();
 
     await expect(range).toHaveAttribute("data-kept", "yes");
   });
@@ -228,25 +248,18 @@ test.describe("switching slots and ranges", () => {
     await panel(page).getByRole("button", { name: "12H", exact: true }).click();
 
     await expect(panel(page).getByText("MARKET IS STILL OPENING")).toHaveCount(0);
-    await expect(panel(page).getByText(/SAMPLED HOURS?$/)).toBeVisible();
+    await expect(chart(page)).toBeVisible();
   });
 
   /** Narrowing filters the series the server sent. It never regenerates one. */
   test("a narrower range shows fewer sampled hours, never more", async ({ page }) => {
     await gotoMarket(page);
 
-    const count = async () => {
-      const text = await panel(page)
-        .getByText(/SAMPLED HOURS?$/)
-        .innerText();
-      return Number(text.match(/(\d+) SAMPLED/)![1]);
-    };
-
     await panel(page).getByRole("button", { name: "48H", exact: true }).click();
-    const wide = await count();
+    const wide = await sampledHoursShown(page);
 
     await panel(page).getByRole("button", { name: "12H", exact: true }).click();
-    const narrow = await count();
+    const narrow = await sampledHoursShown(page);
 
     expect(narrow).toBeLessThanOrEqual(wide);
     expect(narrow).toBeLessThanOrEqual(12);
@@ -286,10 +299,7 @@ test.describe("the honest-numbers rule", () => {
     await gotoMarket(page);
     await panel(page).getByRole("button", { name: "48H", exact: true }).click();
 
-    const text = await panel(page)
-      .getByText(/SAMPLED HOURS?$/)
-      .innerText();
-    expect(Number(text.match(/(\d+) SAMPLED/)![1])).toBe(MARKET_REVEAL_HOURS + 6 - GAP_HOURS);
+    expect(await sampledHoursShown(page)).toBe(MARKET_REVEAL_HOURS + 6 - GAP_HOURS);
   });
 });
 
@@ -312,5 +322,149 @@ test.describe("at 360px", () => {
       () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
     );
     expect(overflows).toBe(false);
+  });
+});
+
+test.describe("the chart", () => {
+  test.beforeAll(async () => {
+    await clear();
+    // Past the reveal threshold and moving, so the chart draws rather than
+    // degrading to a note.
+    await seedSamples(1, MARKET_REVEAL_HOURS + 4, (i) =>
+      i % 2 === 0 ? baseHrCents(1) : Math.round(baseHrCents(1) * 1.6),
+    );
+    await seedSales(1, 4);
+  });
+
+  test("draws a candle chart with the base line and the attribution", async ({ page }) => {
+    await gotoMarket(page);
+
+    const chart = panel(page).getByTestId("price-chart");
+    await expect(chart).toBeVisible();
+    await expect(chart).toHaveAttribute("data-spark", "false");
+    // The library renders to canvas, so the chart existing means canvases exist.
+    await expect(chart.locator("canvas").first()).toBeVisible();
+
+    // TradingView attribution is a licence requirement, not decoration.
+    const credit = panel(page).getByRole("link", { name: "Charts by TradingView" });
+    await expect(credit).toBeVisible();
+    await expect(credit).toHaveAttribute("href", "https://www.tradingview.com/");
+    await expect(panel(page).getByText("CHART ENGINE")).toBeVisible();
+  });
+
+  /** The canvas carries no text, so the reading of the chart lives on the element. */
+  test("describes itself for a screen reader", async ({ page }) => {
+    await gotoMarket(page);
+
+    await expect(
+      panel(page).getByRole("img", { name: /Hourly candles of the ask over \d+ sampled hours/ }),
+    ).toBeVisible();
+  });
+
+  test("keeps the ticker strip pinned as the panel scrolls", async ({ page }) => {
+    await gotoMarket(page);
+
+    const position = await slotTicker(page, 1).evaluate(
+      (el) => getComputedStyle(el.parentElement!).position,
+    );
+    expect(position).toBe("sticky");
+  });
+
+  /**
+   * A range with almost nothing in it degrades to a note rather than drawing a
+   * two-pixel stub — and it must not claim the market is "still opening", which
+   * would be false for a slot with a full history behind it.
+   */
+  test("a range with too little in it says so, without calling the market new", async ({
+    page,
+  }) => {
+    await clear();
+    // Enough history to be a real market, but all of it older than 12 hours.
+    for (let i = 0; i < MARKET_REVEAL_HOURS + 4; i += 1) {
+      await db.askSample.create({
+        data: {
+          slot: 1,
+          hour: hourAt(MARKET_REVEAL_HOURS + 20 - i),
+          askHrCents: i % 2 === 0 ? baseHrCents(1) : Math.round(baseHrCents(1) * 1.6),
+          baseHrCents: baseHrCents(1),
+          queuedHours: 0,
+        },
+      });
+    }
+
+    await gotoMarket(page);
+    await panel(page).getByRole("button", { name: "12H", exact: true }).click();
+
+    await expect(panel(page).getByText("NOTHING IN THIS RANGE")).toBeVisible();
+    await expect(panel(page).getByText("MARKET IS STILL OPENING")).toHaveCount(0);
+    await expect(panel(page).getByTestId("price-chart")).toHaveCount(0);
+
+    // Widening brings the chart back.
+    await panel(page).getByRole("button", { name: "5D", exact: true }).click();
+    await expect(panel(page).getByTestId("price-chart")).toBeVisible();
+  });
+});
+
+test.describe("the chart under 620px", () => {
+  test.beforeAll(async () => {
+    await clear();
+    await seedSamples(1, MARKET_REVEAL_HOURS + 4, (i) =>
+      i % 2 === 0 ? baseHrCents(1) : Math.round(baseHrCents(1) * 1.6),
+    );
+    await seedSales(1, 3);
+  });
+
+  test("collapses to a sparkline with a control to expand it", async ({ page }) => {
+    await page.setViewportSize({ width: SPARKLINE_MAX_WIDTH - 60, height: 900 });
+    await gotoMarket(page);
+
+    const chart = panel(page).getByTestId("price-chart");
+    await expect(chart).toHaveAttribute("data-spark", "true");
+    await expect(panel(page).getByRole("button", { name: "SHOW FULL CHART" })).toBeVisible();
+  });
+
+  test("expands to the full interactive chart on demand", async ({ page }) => {
+    await page.setViewportSize({ width: SPARKLINE_MAX_WIDTH - 60, height: 900 });
+    await gotoMarket(page);
+
+    await panel(page).getByRole("button", { name: "SHOW FULL CHART" }).click();
+
+    const chart = panel(page).getByTestId("price-chart");
+    await expect(chart).toHaveAttribute("data-spark", "false");
+    await expect(chart.locator("canvas").first()).toBeVisible();
+    // The control has done its job and stands down.
+    await expect(panel(page).getByRole("button", { name: "SHOW FULL CHART" })).toHaveCount(0);
+  });
+
+  test("stays a full chart above the threshold", async ({ page }) => {
+    await page.setViewportSize({ width: SPARKLINE_MAX_WIDTH + 200, height: 900 });
+    await gotoMarket(page);
+
+    await expect(panel(page).getByTestId("price-chart")).toHaveAttribute("data-spark", "false");
+    await expect(panel(page).getByRole("button", { name: "SHOW FULL CHART" })).toHaveCount(0);
+  });
+});
+
+test.describe("where the chart sits", () => {
+  test.beforeAll(async () => {
+    await clear();
+    await seedSamples(1, 4, () => baseHrCents(1));
+    await seedSales(1, 1);
+  });
+
+  /** The chart corroborates the board; it does not sell the slot (#12). */
+  test("sits below both the board and the ledger", async ({ page }) => {
+    await gotoMarket(page);
+
+    const order = await page.evaluate(() => {
+      const labels = ["The board", "The ledger", "The market"];
+      return labels.map((label) => {
+        const el = document.querySelector(`[aria-label="${label}"]`);
+        return el ? el.getBoundingClientRect().top + window.scrollY : Number.NaN;
+      });
+    });
+
+    expect(order[0]).toBeLessThan(order[1]!);
+    expect(order[1]).toBeLessThan(order[2]!);
   });
 });

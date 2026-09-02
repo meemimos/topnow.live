@@ -29,6 +29,13 @@ export type SlotMarket = {
   candles: Candle[];
   /** The ask right now, from the newest candle — or base before anything is sampled. */
   askHrCents: number;
+  /**
+   * When real purchases happened, epoch ms, inside the widest range.
+   *
+   * The chart's markers come from these and nothing else. A sale is a marker
+   * because it happened, never because a candle looked like it needed one.
+   */
+  saleMs: number[];
   state: MarketState;
 };
 
@@ -42,7 +49,7 @@ export async function readMarket(now: Date = new Date()): Promise<Market> {
   const db = getDb();
   const from = new Date(now.getTime() - MAX_RANGE_HOURS * MS_PER_HOUR);
 
-  const [samples, totals, sales] = await Promise.all([
+  const [samples, totals, sales, recentSales] = await Promise.all([
     db.askSample.findMany({
       where: { hour: { gte: from } },
       orderBy: { hour: "asc" },
@@ -52,6 +59,13 @@ export async function readMarket(now: Date = new Date()): Promise<Market> {
     // every hour ever sampled, not on the hours inside the current range.
     db.askSample.groupBy({ by: ["slot"], _count: { _all: true }, _min: { hour: true } }),
     db.purchase.groupBy({ by: ["slot"], _count: { _all: true } }),
+    // Only the ones that could carry a marker. The sale *count* above is every
+    // purchase ever, which is what the sparse note reports.
+    db.purchase.findMany({
+      where: { boughtAt: { gte: from } },
+      orderBy: { boughtAt: "asc" },
+      select: { slot: true, boughtAt: true },
+    }),
   ]);
 
   const slots = SLOTS.map((slot) => {
@@ -74,6 +88,9 @@ export async function readMarket(now: Date = new Date()): Promise<Market> {
       // Before anything has been sampled the slot is at base, which is true
       // rather than a placeholder: an unsampled slot has never surged.
       askHrCents: candles[candles.length - 1]?.askHrCents ?? baseHrCents(slot),
+      saleMs: recentSales
+        .filter((sale) => sale.slot === slot)
+        .map((sale) => sale.boughtAt.getTime()),
       state,
     };
   });

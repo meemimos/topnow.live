@@ -46,8 +46,10 @@ export default async function Home() {
         </header>
 
         <Board slots={slots} now={now} />
-        {market && <MarketPanel market={market} now={now} />}
         <LedgerTable ledger={ledger} />
+        {/* Below both the board and the ledger, deliberately (#12): the chart
+            corroborates the board, it does not sell the slot. */}
+        {market && <MarketPanel market={market} now={now} />}
       </main>
     </ServerClockProvider>
   );

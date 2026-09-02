@@ -225,3 +225,87 @@ export function flatSentence(state: Extract<MarketState, { kind: "flat" }>): str
     ? `${opening} No queue, no surge — it is available at base right now.`
     : `${opening} No surge — it is at base right now.`;
 }
+
+/**
+ * A candle in the shape Lightweight Charts wants. Time is **seconds**, not ms.
+ */
+export type Bar = {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+};
+
+/** Integer cents to whole units, for a chart axis that reads in dollars. */
+function toUnits(cents: number): number {
+  return cents / 100;
+}
+
+/**
+ * Candles from the sampled ask.
+ *
+ * ## What a candle can honestly mean here
+ *
+ * There is exactly one observation per hour — the ask, sampled by #22. There is
+ * no intra-hour data, so there is no observed high or low to draw.
+ *
+ * So a candle here means *"between the last observation and this one, the ask
+ * moved from open to close"*, and `high`/`low` are the endpoints of that move.
+ * They are not invented extremes: they are the largest and smallest values
+ * actually observed over the candle's span. A candle body with no wick is the
+ * truthful rendering of a series sampled once an hour, and it still carries the
+ * one thing the chart is for — direction, filled up and hollow down.
+ *
+ * Inventing a wider high or low to make the chart look like a traded market is
+ * exactly the padding this codebase refuses.
+ *
+ * ## Gaps
+ *
+ * `open` is the previous *sample*, not the previous hour. If the sampler missed
+ * three hours, the next candle opens at the last value actually observed and
+ * spans the gap — which is what happened. Nothing is inserted to bridge it, so
+ * the series still has one candle per sample and the gap stays visible on the
+ * time axis.
+ *
+ * The first candle has nothing before it, so it opens where it closes. A doji is
+ * the honest rendering of a single observation.
+ */
+export function toBars(candles: readonly Candle[]): Bar[] {
+  return candles.map((candle, index) => {
+    const close = toUnits(candle.askHrCents);
+    const open = index === 0 ? close : toUnits(candles[index - 1]!.askHrCents);
+
+    return {
+      // Lightweight Charts' UTCTimestamp is in seconds.
+      time: Math.floor(candle.hourMs / 1000),
+      open,
+      high: Math.max(open, close),
+      low: Math.min(open, close),
+      close,
+    };
+  });
+}
+
+/**
+ * Sale markers, snapped to the candle that contains them.
+ *
+ * A marker whose time does not match an existing data point is dropped silently
+ * by the library, so this drops them deliberately instead: a sale in an hour
+ * nobody sampled has no candle to sit under, and inventing that candle to give
+ * it somewhere to land is the one thing this module will not do.
+ *
+ * Deduplicated, because several sales can land in the same hour and the library
+ * requires unique ascending times.
+ */
+export function saleMarkerTimes(saleMs: readonly number[], candles: readonly Candle[]): number[] {
+  const hours = new Set(candles.map((candle) => candle.hourMs));
+  const matched = new Set<number>();
+
+  for (const at of saleMs) {
+    const hour = Math.floor(at / 3_600_000) * 3_600_000;
+    if (hours.has(hour)) matched.add(Math.floor(hour / 1000));
+  }
+
+  return [...matched].sort((a, b) => a - b);
+}

@@ -9,6 +9,8 @@ import {
   isFlat,
   marketStateFor,
   sparseSentence,
+  saleMarkerTimes,
+  toBars,
   toCandles,
   withinRange,
   type Candle,
@@ -262,5 +264,94 @@ describe("candles carry the multiplier that produced them", () => {
     const candles: Candle[] = toCandles([sample(1, 1, 750)]);
     // $7.50 against a $5.00 base is 1.50x.
     expect(candles[0]!.multiplierCm).toBe(150);
+  });
+});
+
+describe("candles carry only what was observed", () => {
+  /**
+   * There is one observation per hour, so a candle's high and low are the
+   * endpoints of the move — not invented extremes. A body with no wick is the
+   * truthful rendering of a series sampled once an hour.
+   */
+  it("draws no wick, because no intra-hour extreme was ever observed", () => {
+    const bars = toBars(toCandles([sample(1, 3, 500), sample(1, 2, 700), sample(1, 1, 600)]));
+
+    for (const bar of bars) {
+      expect(bar.high).toBe(Math.max(bar.open, bar.close));
+      expect(bar.low).toBe(Math.min(bar.open, bar.close));
+    }
+  });
+
+  it("opens each candle at the previous sample and closes at its own", () => {
+    const bars = toBars(toCandles([sample(1, 3, 500), sample(1, 2, 700)]));
+
+    expect(bars[1]).toMatchObject({ open: 5, close: 7, high: 7, low: 5 });
+  });
+
+  /** A single observation is a doji. Anything else would be invented movement. */
+  it("opens the first candle where it closes", () => {
+    const [first] = toBars(toCandles([sample(1, 1, 500)]));
+    expect(first).toMatchObject({ open: 5, close: 5, high: 5, low: 5 });
+  });
+
+  it("spans a gap rather than bridging it", () => {
+    // Sampled at 10h and 2h ago; nothing in between.
+    const bars = toBars(toCandles([sample(1, 10, 500), sample(1, 2, 800)]));
+
+    expect(bars).toHaveLength(2);
+    // The later candle opens at the last value actually observed, which is what
+    // happened — no candles are inserted across the gap to smooth it.
+    expect(bars[1]!.open).toBe(5);
+    expect(bars[1]!.close).toBe(8);
+  });
+
+  it("emits times in seconds, ascending and unique", () => {
+    const bars = toBars(toCandles([sample(1, 3, 500), sample(1, 2, 600), sample(1, 1, 700)]));
+    const times = bars.map((b) => b.time);
+
+    expect(times).toEqual([...times].sort((a, b) => a - b));
+    expect(new Set(times).size).toBe(times.length);
+    // Seconds, not milliseconds — the library's UTCTimestamp.
+    expect(times[0]).toBe(Math.floor((NOW.getTime() - 3 * HOUR) / 1000));
+  });
+
+  it("produces exactly one bar per candle", () => {
+    const candles = toCandles(Array.from({ length: 9 }, (_, i) => sample(1, 9 - i, 500)));
+    expect(toBars(candles)).toHaveLength(candles.length);
+  });
+});
+
+describe("sale markers come from real purchases", () => {
+  const candles = toCandles([sample(1, 3, 500), sample(1, 2, 600), sample(1, 1, 700)]);
+  const hourMs = (hoursAgo: number) => NOW.getTime() - hoursAgo * HOUR;
+
+  it("snaps a sale to the candle whose hour contains it", () => {
+    // Twenty minutes into the hour sampled two hours ago.
+    const times = saleMarkerTimes([hourMs(2) + 20 * 60_000], candles);
+    expect(times).toEqual([Math.floor(hourMs(2) / 1000)]);
+  });
+
+  /**
+   * A marker whose time has no data point is dropped silently by the library.
+   * Dropping it deliberately is the honest alternative to inventing the candle
+   * it would need to land on.
+   */
+  it("drops a sale that happened in an unsampled hour", () => {
+    expect(saleMarkerTimes([hourMs(40)], candles)).toEqual([]);
+  });
+
+  it("collapses several sales in one hour to a single marker", () => {
+    const times = saleMarkerTimes([hourMs(2), hourMs(2) + 60_000, hourMs(2) + 120_000], candles);
+    expect(times).toHaveLength(1);
+  });
+
+  it("returns markers ascending, as the library requires", () => {
+    const times = saleMarkerTimes([hourMs(1), hourMs(3), hourMs(2)], candles);
+    expect(times).toEqual([...times].sort((a, b) => a - b));
+    expect(times).toHaveLength(3);
+  });
+
+  it("returns nothing when there are no sales", () => {
+    expect(saleMarkerTimes([], candles)).toEqual([]);
   });
 });

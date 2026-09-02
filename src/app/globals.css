@@ -72,6 +72,8 @@
   /* Chart only. Green and red mean price direction and nothing else. */
   --color-up: #00a000;
   --color-down: #c40000;
+  /* The chart's own gridlines. Lighter than --color-rule, which is a border. */
+  --color-chart-grid: #e2e2e2;
 
   /* --- Palette: measured from the prototype, absent from the prompt ------ */
   --color-rule: #808080; /* hairline in wells and table cells (48 uses) */

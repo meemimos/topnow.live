@@ -28,6 +28,21 @@ export const FLAT_WINDOW_CANDLES = 6;
  */
 export const FLAT_TOLERANCE = 0.015;
 
+/**
+ * Candles a range must contain before the chart is drawn for it.
+ *
+ * Below this there is no movement to show, and one lonely candle in a 12-hour
+ * window is a stub rather than a chart — #12 asks for the sparse note instead.
+ * Two is the minimum that can depict a change at all.
+ *
+ * Distinct from `MARKET_REVEAL_HOURS`, which is about the slot's whole history:
+ * a slot can be a real market and still have a quiet range selected.
+ */
+export const MIN_CANDLES_IN_RANGE = 2;
+
+/** Below this width the chart collapses to a sparkline with a control to expand it. */
+export const SPARKLINE_MAX_WIDTH = 620;
+
 /** The ranges the chart offers, in hours. `5D` is the prototype's label for 120h. */
 export const RANGES = [
   { hours: 12, label: "12H" },

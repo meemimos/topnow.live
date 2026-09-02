@@ -1,11 +1,18 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import dynamic from "next/dynamic";
+import { useEffect, useMemo, useState } from "react";
 
 import { BevelButton } from "@/components/ui/bevel-button";
 import { Plate } from "@/components/ui/plate";
 import { TitleBar } from "@/components/ui/title-bar";
-import { DEFAULT_RANGE_HOURS, RANGES, type RangeHours } from "@/lib/market/constants";
+import {
+  DEFAULT_RANGE_HOURS,
+  MIN_CANDLES_IN_RANGE,
+  RANGES,
+  SPARKLINE_MAX_WIDTH,
+  type RangeHours,
+} from "@/lib/market/constants";
 import type { Market, SlotMarket } from "@/lib/market/read";
 import {
   flatSentence,
@@ -14,8 +21,8 @@ import {
   type Candle,
   type MarketState,
 } from "@/lib/market/series";
-import { formatMoney, formatMultiplierAgainstBase, slotLabel } from "@/lib/pricing/format";
-import { BASE_MULTIPLIER_CM, type Slot } from "@/lib/pricing";
+import { formatMoney, slotLabel } from "@/lib/pricing/format";
+import type { Slot } from "@/lib/pricing";
 import { cn } from "@/lib/utils";
 
 /**
@@ -113,6 +120,36 @@ function SparseNote({ state }: { state: Extract<MarketState, { kind: "sparse" }>
   );
 }
 
+/**
+ * A range with nothing much in it.
+ *
+ * Deliberately *not* the sparse note: this slot is a real market with enough
+ * sampled hours behind it, and telling the reader it is "still opening" would be
+ * false. What is true is that the window they picked is empty, and the fix is
+ * theirs — widen it.
+ */
+function ThinRangeNote({
+  slot,
+  rangeHours,
+  candles,
+}: {
+  slot: Slot;
+  rangeHours: number;
+  candles: number;
+}) {
+  return (
+    <Plate variant="inset" surface="paper" className="mx-[5px] px-3.5 py-[18px]">
+      <div className="text-md font-pixel font-bold tracking-[0.04em]">NOTHING IN THIS RANGE</div>
+      <p className="text-[12.5px] mt-2.5 mb-0 leading-[1.6]">
+        {candles === 0
+          ? `Nothing was sampled on ${slotLabel(slot).toLowerCase()} in the last ${rangeHours} hours.`
+          : `Only one sampled hour on ${slotLabel(slot).toLowerCase()} in the last ${rangeHours} hours — not enough to show a move.`}{" "}
+        Widen the range to see its history.
+      </p>
+    </Plate>
+  );
+}
+
 /** The flat note. An invitation, not an error — so it gets the note surface, not a warning. */
 function FlatNote({ state }: { state: Extract<MarketState, { kind: "flat" }> }) {
   return (
@@ -126,33 +163,61 @@ function FlatNote({ state }: { state: Extract<MarketState, { kind: "flat" }> }) 
 }
 
 /**
- * Where #12 draws. Until then it states what it is holding rather than pretending.
+ * The chart itself, loaded only in the browser.
  *
- * Reached only once a slot is past the reveal threshold and is actually moving,
- * so anything rendered here is backed by real sampled hours.
+ * Lightweight Charts measures a real DOM element, so it cannot be server
+ * rendered. `ssr: false` keeps it out of the server pass entirely rather than
+ * rendering a shell the client immediately discards — and keeps ~50KB of chart
+ * library off the critical path for the sparse state, which never draws one.
  */
-function ChartRegion({ slot, candles }: { slot: Slot; candles: Candle[] }) {
-  const last = candles[candles.length - 1];
+const PriceChart = dynamic(() => import("./chart").then((m) => m.PriceChart), {
+  ssr: false,
+  loading: () => <div className="min-h-[110px]" aria-hidden="true" />,
+});
 
+/** The drawn chart, in its bevelled well. */
+function ChartRegion({
+  candles,
+  saleMs,
+  baseHrCents,
+  spark,
+}: {
+  candles: Candle[];
+  saleMs: number[];
+  baseHrCents: number;
+  spark: boolean;
+}) {
   return (
     <Plate variant="inset" surface="paper" className="mx-[5px] p-1">
-      <div className="flex min-h-[180px] flex-col items-center justify-center gap-1.5 px-3 py-6">
-        <span className="text-sm font-pixel text-ink-soft">
-          {slotLabel(slot)} · {candles.length} SAMPLED {candles.length === 1 ? "HOUR" : "HOURS"}
-        </span>
-        {last && (
-          <span className="text-md text-ink-soft" data-numeric>
-            Now asking {formatMoney(last.askHrCents)}/hr —{" "}
-            {formatMultiplierAgainstBase(last.multiplierCm)}.
-          </span>
-        )}
-        <span className="text-md mt-1 text-center text-ink-soft">
-          Candles are drawn in #12. Every one of them comes from a sampled hour; none is
-          interpolated.
-        </span>
-      </div>
+      <PriceChart candles={candles} saleMs={saleMs} baseHrCents={baseHrCents} spark={spark} />
     </Plate>
   );
+}
+
+/**
+ * Whether the viewport is under the sparkline threshold (#12).
+ *
+ * A media query in CSS could hide one and show the other, but both charts would
+ * then be constructed — two canvases, two ResizeObservers, and the hidden one
+ * measuring a zero-width container. So the decision is made in JS and only one
+ * chart ever exists.
+ *
+ * Starts false so the server and the first client paint agree; the effect
+ * corrects it before anything is drawn, since the chart itself is client-only.
+ */
+function useNarrow(): boolean {
+  const [narrow, setNarrow] = useState(false);
+
+  useEffect(() => {
+    const query = window.matchMedia(`(max-width: ${SPARKLINE_MAX_WIDTH - 1}px)`);
+    const sync = () => setNarrow(query.matches);
+
+    sync();
+    query.addEventListener("change", sync);
+    return () => query.removeEventListener("change", sync);
+  }, []);
+
+  return narrow;
 }
 
 export function MarketPanel({ market, now }: { market: Market; now: number }) {
@@ -181,6 +246,23 @@ export function MarketPanel({ market, now }: { market: Market; now: number }) {
     [current.candles, rangeHours, now],
   );
 
+  /**
+   * Under 620px the chart collapses to a sparkline with a control to expand it
+   * (#12). Measured rather than guessed from a media query, because the panel is
+   * a column inside a fluid layout and its width is not the viewport's.
+   */
+  const narrow = useNarrow();
+  const [expanded, setExpanded] = useState(false);
+  const spark = narrow && !expanded;
+
+  /**
+   * A range with too little in it degrades to the sparse note rather than
+   * drawing a stub (#12). This is not the reveal threshold — the slot is a real
+   * market either way — it is that one candle in a twelve-hour window has no
+   * movement to show, and a two-pixel chart claims more than it can support.
+   */
+  const tooThinToDraw = state.kind !== "sparse" && candles.length < MIN_CANDLES_IN_RANGE;
+
   return (
     <section aria-label="The market">
       <div className="mt-5 flex flex-wrap items-center justify-between gap-1.5 px-0.5">
@@ -196,8 +278,13 @@ export function MarketPanel({ market, now }: { market: Market; now: number }) {
         <TitleBar meta="DOLLARS PER HOUR">MARKET — $/HR</TitleBar>
 
         {/* The ticker strip. Stays put in every state, so the panel keeps its
-            shape whether or not there is a chart to show. */}
-        <div className="flex flex-wrap gap-1 px-[5px] pt-1.5" role="group" aria-label="Pick a slot">
+            shape whether or not there is a chart to show — and sticks to the top
+            once the chart scrolls past, where it doubles as the summary (#12). */}
+        <div
+          className="sticky top-0 z-10 flex flex-wrap gap-1 bg-plate px-[5px] pt-1.5 pb-1"
+          role="group"
+          aria-label="Pick a slot"
+        >
           {market.slots.map((entry) => (
             <Ticker
               key={entry.slot}
@@ -233,24 +320,43 @@ export function MarketPanel({ market, now }: { market: Market; now: number }) {
 
         {state.kind === "sparse" ? (
           <SparseNote state={state} />
+        ) : tooThinToDraw ? (
+          <ThinRangeNote slot={state.slot} rangeHours={rangeHours} candles={candles.length} />
         ) : (
           <>
             {/* One region in both remaining states, so a slot that is flat and
                 one that is moving render the same shape — only the note below
                 differs, and the panel never remounts between them. */}
-            <ChartRegion slot={state.slot} candles={candles} />
+            <ChartRegion
+              candles={candles}
+              saleMs={current.saleMs}
+              baseHrCents={current.baseHrCents}
+              spark={spark}
+            />
+            {spark && (
+              <div className="px-[5px] pt-1.5">
+                <BevelButton size="lg" className="py-3" onClick={() => setExpanded(true)}>
+                  SHOW FULL CHART
+                </BevelButton>
+              </div>
+            )}
             {state.kind === "flat" && <FlatNote state={state} />}
           </>
         )}
 
-        <div className="text-2xs mx-[5px] mt-2 mb-[5px] flex flex-wrap items-center justify-between gap-x-2.5 gap-y-1.5 border border-ink bg-well px-2 py-1.5 shadow-plate font-pixel">
-          <span>PRICING</span>
-          <span className="text-base font-sans" data-numeric>
-            Base {formatMoney(current.baseHrCents)}/hr ·{" "}
-            {formatMultiplierAgainstBase(
-              Math.round((current.askHrCents * BASE_MULTIPLIER_CM) / current.baseHrCents),
-            )}
-          </span>
+        {/* Attribution is a licence requirement of Lightweight Charts, so it gets
+            a deliberate, visible home in the footer rather than a watermark that
+            could be mistaken for decoration and styled away. */}
+        <div className="text-2xs mx-[5px] mt-2 mb-[5px] flex flex-wrap items-center justify-between gap-x-2.5 gap-y-1.5 border border-ink bg-well px-2 py-1.5 font-pixel shadow-plate">
+          <span>CHART ENGINE</span>
+          <a
+            className="text-base font-sans"
+            href="https://www.tradingview.com/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Charts by TradingView
+          </a>
         </div>
       </Plate>
     </section>
