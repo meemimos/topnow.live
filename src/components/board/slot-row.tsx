@@ -1,10 +1,12 @@
 import type { Purchase } from "@prisma/client";
 
-import { AvatarPlaceholder } from "@/components/board/avatar";
+import { Avatar } from "@/components/board/avatar";
 import { CompactMeter } from "@/components/board/meter";
 import { PLATFORMS, displayNameFor, linkTextFor } from "@/components/board/platform";
 import { BevelButton } from "@/components/ui/bevel-button";
 import { Plate, VacantPlate } from "@/components/ui/plate";
+import type { BoardAvatar } from "@/lib/avatar/store";
+import { clickThroughHref } from "@/lib/embed/clicks";
 
 /**
  * Slots 02 and 03 (#6): a compact row, structurally distinct from slot 01.
@@ -16,10 +18,13 @@ import { Plate, VacantPlate } from "@/components/ui/plate";
 export function SlotRow({
   slot,
   live,
+  avatar,
   cta,
 }: {
   slot: number;
   live: Purchase;
+  /** Undefined when nothing resolved — the placeholder renders instead (#19). */
+  avatar: BoardAvatar | undefined;
   cta: { label: string; disabled?: boolean };
 }) {
   const platform = PLATFORMS[live.platform];
@@ -28,7 +33,7 @@ export function SlotRow({
     <Plate className="flex flex-wrap items-center gap-2.5 px-[11px] py-[9px]">
       <span className="text-md shrink-0 font-pixel">{String(slot).padStart(2, "0")}</span>
 
-      <AvatarPlaceholder size="small" />
+      <Avatar avatar={avatar} size="small" />
 
       <div className="min-w-[165px] flex-[1_1_190px]">
         <div className="flex items-center gap-1.5">
@@ -38,9 +43,10 @@ export function SlotRow({
         <div className="text-md mt-0.5 leading-[1.5]">{live.tagline}</div>
       </div>
 
+      {/* Counted, like slot 01's (#20). */}
       <a
         className="text-[11.5px] shrink-0 break-all"
-        href={live.targetUrl}
+        href={clickThroughHref(live.id)}
         rel="nofollow ugc noopener noreferrer"
         target="_blank"
       >

@@ -370,10 +370,15 @@ test.describe("the chart", () => {
   test("keeps the ticker strip pinned as the panel scrolls", async ({ page }) => {
     await gotoMarket(page);
 
-    const position = await slotTicker(page, 1).evaluate(
-      (el) => getComputedStyle(el.parentElement!).position,
+    // Asserted on the strip itself rather than by reaching for a button's
+    // parentElement. The panel re-renders on the clock tick, so a node resolved
+    // one moment can be detached the next — and getComputedStyle on a detached
+    // node returns an empty declaration, which reads as "not sticky" rather than
+    // as "look again". toHaveCSS re-resolves the locator on each attempt.
+    await expect(panel(page).getByRole("group", { name: "Pick a slot" })).toHaveCSS(
+      "position",
+      "sticky",
     );
-    expect(position).toBe("sticky");
   });
 
   /**

@@ -1,11 +1,15 @@
 import type { Purchase } from "@prisma/client";
 
+import { EmbeddedPost } from "@/components/board/embedded-post";
 import { Meter } from "@/components/board/meter";
-import { AvatarPlaceholder } from "@/components/board/avatar";
+import { Avatar } from "@/components/board/avatar";
 import { PLATFORMS, displayNameFor, linkTextFor } from "@/components/board/platform";
 import { BevelButton } from "@/components/ui/bevel-button";
 import { Plate } from "@/components/ui/plate";
 import { TitleBar } from "@/components/ui/title-bar";
+import type { BoardAvatar } from "@/lib/avatar/store";
+import { clickThroughHref } from "@/lib/embed/clicks";
+import type { BoardEmbed } from "@/lib/embed/store";
 import { formatMoney } from "@/lib/pricing/format";
 import { formatClock } from "@/lib/time";
 
@@ -20,16 +24,25 @@ import { formatClock } from "@/lib/time";
  * size, room for the tagline to breathe, and the meter given a full column of
  * its own rather than a compact readout.
  *
- * The embedded post panel is #20. Until it lands — and afterwards whenever an
- * embed fails to resolve — slot 01 renders as the profile card below, which is
- * a complete state rather than a hole. Never a dead card at number one.
+ * The embedded post panel (#20) sits under the profile card when there is a post
+ * to show. When there is not — no post link, a platform with no provider, a
+ * deleted post, a resolution that failed — `embed` is null and the panel is
+ * simply absent. Slot 01 is then the profile card, which is a complete state
+ * rather than a hole. Never a dead card at number one, and never an explanation
+ * of why a third party did not answer.
  */
 export function SlotOne({
   live,
+  avatar,
+  embed,
   queuedCount,
   cta,
 }: {
   live: Purchase;
+  /** Undefined when nothing resolved — the placeholder renders instead (#19). */
+  avatar: BoardAvatar | undefined;
+  /** Null whenever there is nothing renderable. The panel is then absent (#20). */
+  embed: BoardEmbed | null;
   queuedCount: number;
   cta: { label: string; disabled?: boolean };
 }) {
@@ -47,7 +60,7 @@ export function SlotOne({
         <div className="flex min-w-[250px] flex-[1_1_300px] flex-col">
           <Plate variant="inset" surface="paper" className="h-full p-3">
             <div className="flex items-start gap-3">
-              <AvatarPlaceholder size="large" />
+              <Avatar avatar={avatar} size="large" />
 
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-[7px]">
@@ -61,9 +74,12 @@ export function SlotOne({
 
                 <p className="text-lg mt-[7px] mb-[9px] leading-[1.55]">{live.tagline}</p>
 
+                {/* Routed through our own counter (#20) so the clicks figure is
+                    something TopNow measured rather than borrowed. The text is
+                    still the real destination — the link says where it goes. */}
                 <a
                   className="text-md break-all"
-                  href={live.targetUrl}
+                  href={clickThroughHref(live.id)}
                   rel="nofollow ugc noopener noreferrer"
                   target="_blank"
                 >
@@ -71,6 +87,8 @@ export function SlotOne({
                 </a>
               </div>
             </div>
+
+            {embed && <EmbeddedPost embed={embed} clicks={live.clicks} />}
           </Plate>
         </div>
 

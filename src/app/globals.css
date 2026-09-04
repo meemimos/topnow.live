@@ -182,6 +182,20 @@ table {
   font-variant-numeric: tabular-nums;
 }
 
+/* The activity ticker (#16). Two identical copies sit side by side and the
+   pair slides exactly one copy's width, so the loop has no visible seam.
+   Held behind `motion-safe:` in the component, which is what makes the
+   reduced-motion state a plain scrollable row rather than a frozen marquee
+   showing half its content. */
+@keyframes tn-ticker {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
 @keyframes tn-blink {
   0%,
   55% {

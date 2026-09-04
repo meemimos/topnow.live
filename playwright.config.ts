@@ -41,17 +41,17 @@ export default defineConfig({
      */
     {
       name: "mobile-360",
-      testIgnore: /(board|receipt|ledger|market|pricing)\.spec\.ts/,
+      testIgnore: /(board|receipt|ledger|market|pricing|avatar|embed|counters|ticker)\.spec\.ts/,
       use: { ...devices["Desktop Chrome"], viewport: { width: 360, height: 800 } },
     },
     {
       name: "tablet-768",
-      testIgnore: /(board|receipt|ledger|market|pricing)\.spec\.ts/,
+      testIgnore: /(board|receipt|ledger|market|pricing|avatar|embed|counters|ticker)\.spec\.ts/,
       use: { ...devices["Desktop Chrome"], viewport: { width: 768, height: 1024 } },
     },
     {
       name: "desktop-1280",
-      testIgnore: /(board|receipt|ledger|market|pricing)\.spec\.ts/,
+      testIgnore: /(board|receipt|ledger|market|pricing|avatar|embed|counters|ticker)\.spec\.ts/,
       use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } },
     },
     /**
@@ -89,6 +89,30 @@ export default defineConfig({
       name: "pricing",
       testMatch: /pricing\.spec\.ts/,
       dependencies: ["market"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } },
+    },
+    {
+      name: "avatar",
+      testMatch: /avatar\.spec\.ts/,
+      dependencies: ["pricing"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } },
+    },
+    {
+      name: "embed",
+      testMatch: /embed\.spec\.ts/,
+      dependencies: ["avatar"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } },
+    },
+    {
+      name: "counters",
+      testMatch: /counters\.spec\.ts/,
+      dependencies: ["embed"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } },
+    },
+    {
+      name: "ticker",
+      testMatch: /ticker\.spec\.ts/,
+      dependencies: ["counters"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } },
     },
   ],

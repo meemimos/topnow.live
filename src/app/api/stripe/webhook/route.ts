@@ -1,6 +1,6 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { NextResponse, after, type NextRequest } from "next/server";
 
-import { handleStripeEvent } from "@/lib/payments/webhook";
+import { handleStripeEvent, resolveListingMedia } from "@/lib/payments/webhook";
 import { constructWebhookEvent, liveGateway } from "@/lib/payments/stripe";
 
 // Never cached, never statically analysed: this is a write endpoint.
@@ -37,6 +37,17 @@ export async function POST(request: NextRequest) {
 
   try {
     const outcome = await handleStripeEvent(event, liveGateway);
+
+    if (outcome.kind === "created") {
+      // The avatar and the embed are fetched from third parties, and Stripe's
+      // handler has to answer quickly. `after` runs them once this response has
+      // gone but while the invocation is still alive — a plain dangling promise
+      // can be killed the instant the handler returns, and awaiting them inline
+      // risks the function's limit expiring after the purchase has committed
+      // but before the 200, which Stripe records as a failed delivery.
+      after(() => resolveListingMedia(outcome.media));
+    }
+
     return NextResponse.json({ received: true, outcome: outcome.kind });
   } catch (error) {
     // A 500 tells Stripe to retry, which is what we want for a transient

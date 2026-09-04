@@ -1,15 +1,23 @@
+import { headers } from "next/headers";
+
 import { Board } from "@/components/board/board";
+import { Counters } from "@/components/counters/counters";
 import { ServerClockProvider } from "@/components/clock/provider";
 import { LedgerTable } from "@/components/ledger/ledger";
 import { MarketPanel } from "@/components/market/market";
 import { PricingDialog } from "@/components/pricing/pricing-dialog";
+import { Ticker } from "@/components/ticker/ticker";
 import { BevelButton } from "@/components/ui/bevel-button";
+import { readAvatars } from "@/lib/avatar/store";
+import { readEmbed } from "@/lib/embed/store";
 import { clientConfig } from "@/lib/config/client";
 import { readMarket } from "@/lib/market/read";
 import { DURATION_HOURS, askHrCents, baseHrCents } from "@/lib/pricing";
 import { currentAsks } from "@/lib/purchase/queue";
 import { currentBoard, readLedger } from "@/lib/purchase/state";
+import { readTicker } from "@/lib/ticker/read";
 import { serverNow } from "@/lib/time/server";
+import { readCounts, recordVisit } from "@/lib/visits/store";
 
 // The board changes every second and reflects live state, so it is never
 // prerendered. Reading it also promotes anything whose window has closed (#1).
@@ -32,6 +40,28 @@ export default async function Home() {
   // The pricing dialog quotes the same ask checkout would charge, read per
   // request — a static price list beside a surging board is worse than none.
   const asks = await currentAsks(DURATION_HOURS, new Date(now));
+
+  // TopNow's own avatar copies (#19). A read, never a resolution: the board must
+  // not make a third-party request, and a page render must not be able to spend
+  // an upstream rate-limit budget.
+  const avatars = await readAvatars(slots.flatMap((slot) => (slot.live ? [slot.live] : [])));
+
+  // Slot 01's post embed (#20). A read, like the avatars. Null covers every
+  // reason there might be nothing to show — no post link, a platform with no
+  // provider, a deleted post, a resolution that failed — and slot 01 renders the
+  // profile card in all of them.
+  const embed = await readEmbed(slots[0]?.live ?? null);
+
+  // Note the visit, then read the counters (#15). Recording is idempotent within
+  // the window, so a reload is not a second visit; reading comes from a cache,
+  // so a page render never triggers a counting query however busy the board is.
+  await recordVisit(await headers(), new Date(now));
+  const counts = await readCounts(new Date(now));
+
+  // What has actually happened (#16). Derived from purchase transitions and
+  // hourly samples — there is no events table, so a quiet board simply produces
+  // a quiet strip rather than one somebody could have filled.
+  const activity = await readTicker(new Date(now));
 
   return (
     <ServerClockProvider serverNow={now}>
@@ -64,7 +94,9 @@ export default async function Home() {
           </div>
         </header>
 
-        <Board slots={slots} now={now} />
+        <Board slots={slots} now={now} avatars={avatars} embed={embed} />
+        <Ticker events={activity} />
+        <Counters counts={counts} />
         <LedgerTable ledger={ledger} />
         {/* Below both the board and the ledger, deliberately (#12): the chart
             corroborates the board, it does not sell the slot. */}

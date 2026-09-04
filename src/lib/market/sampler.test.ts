@@ -1,6 +1,8 @@
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import * as avatarStore from "@/lib/avatar/store";
 import { getDb } from "@/lib/db";
+import * as embedStore from "@/lib/embed/store";
 import { quoteForQueue, type DurationHours, type Slot } from "@/lib/pricing";
 import { currentBoard, liveOnSlot } from "@/lib/purchase/state";
 
@@ -289,5 +291,37 @@ describe("the tick", () => {
   it("reports what it did", async () => {
     const result = await runHourlyTick(NOW);
     expect(result).toMatchObject({ hour: THIS_HOUR, samplesWritten: 3, samplesSkipped: 0 });
+  });
+});
+
+/**
+ * The refresh passes are not load-bearing (#19, #20).
+ *
+ * The sample is the part of this job the chart depends on, and an hour of it can
+ * never be recovered — so nothing bolted on after it may take the run down.
+ */
+describe("the tick survives a failing refresh", () => {
+  it("still writes the sample when the avatar refresh throws", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // The queries that *choose* what to refresh sit outside ensureAvatar's own
+    // error handling, so a dropped connection there used to fail the whole tick.
+    vi.spyOn(avatarStore, "refreshStaleAvatars").mockRejectedValueOnce(
+      new Error("connection lost"),
+    );
+
+    const result = await runHourlyTick(new Date());
+
+    expect(result.samplesWritten + result.samplesSkipped).toBeGreaterThan(0);
+    expect(result.avatars).toEqual({ considered: 0, resolved: 0, failed: 0 });
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it("still writes the sample when the embed refresh throws", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(embedStore, "refreshStaleEmbeds").mockRejectedValueOnce(new Error("connection lost"));
+
+    const result = await runHourlyTick(new Date());
+    expect(result.samplesWritten + result.samplesSkipped).toBeGreaterThan(0);
+    expect(result.embeds).toEqual({ considered: 0, resolved: 0, failed: 0 });
   });
 });

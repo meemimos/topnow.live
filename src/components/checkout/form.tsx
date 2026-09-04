@@ -49,6 +49,23 @@ function Step({ number, children }: { number: number; children: string }) {
   );
 }
 
+/**
+ * Platforms whose posts can be embedded (#20).
+ *
+ * The three with a public oEmbed endpoint. GitHub has no post, Instagram needs
+ * an app token, and a website is a link rather than a post — so the field is
+ * simply not shown for those, rather than shown and then rejected.
+ */
+const EMBEDDABLE = ["youtube", "tiktok", "reddit"] as const;
+type EmbeddablePlatform = (typeof EMBEDDABLE)[number];
+
+/** A shape, not an instruction — same convention as the handle placeholders. */
+const POST_URL_EXAMPLE: Record<EmbeddablePlatform, string> = {
+  youtube: "https://www.youtube.com/watch?v=...",
+  tiktok: "https://www.tiktok.com/@handle/video/...",
+  reddit: "https://www.reddit.com/r/sub/comments/...",
+};
+
 function FieldError({ message }: { message?: string }) {
   if (!message) return null;
   return (
@@ -79,6 +96,11 @@ export function CheckoutForm({ onQuote }: { onQuote?: (priced: PricedListing | n
   const [url, setUrl] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [tagline, setTagline] = useState("");
+  // Slot 01's embedded post (#20). Optional, and only offered on the platforms
+  // that actually have a public oEmbed endpoint.
+  const [postUrl, setPostUrl] = useState("");
+
+  const embeddable = (EMBEDDABLE as readonly string[]).includes(platform);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [pending, startTransition] = useTransition();
 
@@ -96,7 +118,16 @@ export function CheckoutForm({ onQuote }: { onQuote?: (priced: PricedListing | n
     const payload: CheckoutInput =
       platform === "web"
         ? { slot, durationH: duration.hours, platform, displayName, url, tagline }
-        : { slot, durationH: duration.hours, platform, handle, tagline };
+        : {
+            slot,
+            durationH: duration.hours,
+            platform,
+            handle,
+            tagline,
+            // Omitted rather than sent empty: the field is optional, and an
+            // empty string is a value the schema would have to special-case.
+            ...(embeddable && postUrl.trim() ? { postUrl: postUrl.trim() } : {}),
+          };
 
     startTransition(async () => {
       const result = await priceCheckout(payload);
@@ -235,6 +266,30 @@ export function CheckoutForm({ onQuote }: { onQuote?: (priced: PricedListing | n
               {derivedUrl ? `Links to ${derivedUrl}` : "Links to the address shown above."}
             </span>
             <FieldError message={errors.handle} />
+          </label>
+        )}
+
+        {embeddable && (
+          <label className="mb-3 block">
+            <span className="text-md mb-1 block">
+              Link to a post <span className="text-ink-soft">(optional)</span>
+            </span>
+            <input
+              type="url"
+              inputMode="url"
+              className="text-lg w-full border border-ink bg-paper px-2 py-1.5"
+              value={postUrl}
+              maxLength={2048}
+              onChange={(event) => setPostUrl(event.target.value)}
+              placeholder={POST_URL_EXAMPLE[platform as EmbeddablePlatform]}
+              aria-invalid={Boolean(errors.postUrl)}
+              aria-describedby="post-url-help"
+            />
+            <span id="post-url-help" className="text-xs mt-1 block text-ink-soft">
+              Slot 01 shows the post itself. Slots 02 and 03 do not, so this only changes anything
+              on the top slot.
+            </span>
+            <FieldError message={errors.postUrl} />
           </label>
         )}
 

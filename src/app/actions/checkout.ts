@@ -154,6 +154,9 @@ export async function startPayment(input: unknown): Promise<StartPaymentResult> 
       platform: parsed.data.platform,
       displayName: parsed.data.displayName ?? "",
       targetUrl: parsed.data.targetUrl,
+      // Already normalised by the schema, so what the webhook writes is the same
+      // string the embed cache is keyed on (#20). Empty means no post.
+      postUrl: parsed.data.postUrl ?? "",
       tagline: parsed.data.tagline,
       // Locked. The webhook writes these rather than re-pricing.
       priceHrCents: String(quote.askHrCents),

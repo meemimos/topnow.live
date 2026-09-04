@@ -3,6 +3,11 @@ import "server-only";
 import { Prisma } from "@prisma/client";
 import type Stripe from "stripe";
 
+import type { Platform } from "@prisma/client";
+
+import { ensureAvatar } from "@/lib/avatar/store";
+import { isValidPostUrl } from "@/lib/embed/providers";
+import { ensureEmbed } from "@/lib/embed/store";
 import { isDurationHours, isSlot, type DurationHours, type Slot } from "@/lib/pricing";
 import {
   QueueAtCapacityError,
@@ -31,6 +36,8 @@ export type SessionMetadata = {
   platform: "github" | "youtube" | "instagram" | "tiktok" | "reddit" | "web";
   displayName: string | null;
   targetUrl: string;
+  /** The post to embed on slot 01 (#20). Null for a listing without one. */
+  postUrl: string | null;
   tagline: string;
   /** Locked at checkout. Never recomputed here. */
   priceHrCents: number;
@@ -76,6 +83,12 @@ export function parseSessionMetadata(raw: Record<string, string> | null): Sessio
   if (!raw.targetUrl?.startsWith("https://")) {
     throw new InvalidSessionMetadataError("targetUrl is not https");
   }
+  // Re-validated rather than trusted, like everything else here: the session
+  // could have been created by an older deploy with looser rules, and this URL
+  // is what an outbound request will later be built from.
+  if (raw.postUrl && !isValidPostUrl(raw.platform as Platform, raw.postUrl)) {
+    throw new InvalidSessionMetadataError("postUrl is not a usable post link");
+  }
 
   return {
     slot,
@@ -84,6 +97,7 @@ export function parseSessionMetadata(raw: Record<string, string> | null): Sessio
     platform: raw.platform as SessionMetadata["platform"],
     displayName: raw.displayName || null,
     targetUrl: raw.targetUrl,
+    postUrl: raw.postUrl || null,
     tagline: raw.tagline ?? "",
     priceHrCents,
     totalPaidCents,
@@ -91,7 +105,7 @@ export function parseSessionMetadata(raw: Record<string, string> | null): Sessio
 }
 
 export type WebhookOutcome =
-  | { kind: "created"; purchaseId: string }
+  | { kind: "created"; purchaseId: string; media: PendingMedia }
   | { kind: "duplicate" }
   | { kind: "refunded"; reason: string }
   | { kind: "ignored"; type: string };
@@ -132,6 +146,34 @@ export async function handleStripeEvent(
   }
 }
 
+/** What a created purchase still needs fetched from a third party. */
+export type PendingMedia = {
+  platform: SessionMetadata["platform"];
+  handle: string;
+  postUrl: string | null;
+  now: Date;
+};
+
+/**
+ * Fetch the listing's avatar and post embed (#19, #20).
+ *
+ * Exported and called by the route rather than from inside the handler, because
+ * the scheduling primitive (`after`) belongs to the request lifecycle and this
+ * module has no business knowing about one. It also keeps this directly
+ * callable from a test.
+ *
+ * Neither call can throw — both report failure as a return value — and neither
+ * is load-bearing: a listing whose avatar did not resolve renders the designed
+ * placeholder, and one whose embed did not resolve renders the profile card.
+ * Whatever does not land here is picked up by the hourly refresh.
+ */
+export async function resolveListingMedia(media: PendingMedia): Promise<void> {
+  await ensureAvatar(media.platform, media.handle, { now: media.now });
+  if (media.postUrl) {
+    await ensureEmbed(media.platform, media.postUrl, { now: media.now });
+  }
+}
+
 async function handleCompletedSession(
   session: Stripe.Checkout.Session,
   gateway: PaymentGateway,
@@ -163,6 +205,7 @@ async function handleCompletedSession(
           platform: metadata.platform,
           displayName: metadata.displayName,
           targetUrl: metadata.targetUrl,
+          postUrl: metadata.postUrl,
           tagline: metadata.tagline,
           // Straight from the locked metadata. Recomputing here would re-price
           // the buyer at whatever surge has since become.
@@ -178,7 +221,38 @@ async function handleCompletedSession(
     // immediately rather than waiting for a read or the hourly job.
     await promoteSlot(metadata.slot, now);
 
-    return { kind: "created", purchaseId: purchase.id };
+    // Resolve the avatar and the embed here, because this is the submit (#19,
+    // #20): it is the one moment the product learns about a new account, and
+    // resolving anywhere downstream would mean resolving on a read.
+    //
+    // Deferred rather than awaited inline. Both calls talk to third parties —
+    // up to four seconds for an avatar and seven for an embed and its
+    // thumbnail — and Stripe's handler has to answer quickly. Awaited, a slow
+    // provider could hold the response past the function's limit, killing the
+    // handler *after* the purchase committed but *before* the 200: Stripe would
+    // record a failed delivery and retry a purchase that already exists.
+    //
+    // A bare dangling promise would be the other failure — the runtime can kill
+    // it the instant the handler returns. `after` is the primitive for exactly
+    // this: the work runs once the response is sent, still inside the
+    // invocation's lifetime.
+    return {
+      kind: "created",
+      purchaseId: purchase.id,
+      // Handed back rather than fetched here. Both calls talk to third parties
+      // — up to four seconds for an avatar and seven for an embed and its
+      // thumbnail — and Stripe's handler has to answer quickly. Awaited inline,
+      // a slow provider could hold the response past the function's limit,
+      // killing the handler *after* the purchase committed but *before* the
+      // 200: Stripe would record a failed delivery and retry a purchase that
+      // already exists. The route runs this after the response has gone.
+      media: {
+        platform: metadata.platform,
+        handle: metadata.handle,
+        postUrl: metadata.postUrl,
+        now,
+      },
+    };
   } catch (error) {
     if (isUniqueViolation(error)) {
       // Stripe retried, or two deliveries landed together. One row exists,

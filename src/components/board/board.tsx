@@ -6,6 +6,8 @@ import { BevelButton } from "@/components/ui/bevel-button";
 import { DURATION_HOURS, quoteForQueue, type Slot } from "@/lib/pricing";
 import { formatMoney, slotLabel } from "@/lib/pricing/format";
 import { acceptsNewBookings } from "@/lib/purchase/queue";
+import { avatarLookupKey, type BoardAvatar } from "@/lib/avatar/store";
+import type { BoardEmbed } from "@/lib/embed/store";
 import type { BoardSlot } from "@/lib/purchase/state";
 
 /**
@@ -77,7 +79,26 @@ function VacantSlotOne({ state }: { state: BoardSlot }) {
   );
 }
 
-export function Board({ slots, now }: { slots: BoardSlot[]; now: number }) {
+export function Board({
+  slots,
+  now,
+  avatars,
+  embed,
+}: {
+  slots: BoardSlot[];
+  now: number;
+  /**
+   * TopNow's own avatar copies, keyed by platform and handle (#19). Read
+   * alongside the board in one query; a listing missing from the map renders the
+   * placeholder, which is a designed state rather than a failure.
+   */
+  avatars: Map<string, BoardAvatar>;
+  /**
+   * Slot 01's post embed (#20), or null when there is nothing renderable. Only
+   * slot 01 has one: the panel is part of what the top slot's premium buys.
+   */
+  embed: BoardEmbed | null;
+}) {
   const [one, two, three] = slots;
 
   return (
@@ -94,6 +115,8 @@ export function Board({ slots, now }: { slots: BoardSlot[]; now: number }) {
       {one.live ? (
         <SlotOne
           live={one.live}
+          avatar={avatars.get(avatarLookupKey(one.live))}
+          embed={embed}
           queuedCount={one.queuedCount}
           cta={ctaFor(one, one.queuedHours + remainingHoursOf(one, now))}
         />
@@ -108,6 +131,7 @@ export function Board({ slots, now }: { slots: BoardSlot[]; now: number }) {
               key={state.slot}
               slot={state.slot}
               live={state.live}
+              avatar={avatars.get(avatarLookupKey(state.live))}
               cta={ctaFor(state, state.queuedHours + remainingHoursOf(state, now))}
             />
           ) : (
