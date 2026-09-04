@@ -92,13 +92,18 @@ export function Receipt({
       {/* Only when there is something to say. Surge is a multiplier here, not a
           colour, and not a red badge. */}
       {hasSurge(quote.multiplierCm) && (
-        <Plate surface="note" className="text-md mt-2 border-2 px-3 py-2 shadow-none">
-          <span className="font-pixel font-bold">
+        <div className="text-md mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-1.5 border border-ink bg-ink px-3 py-2.5 text-paper">
+          {/* A black plate with a badge, as the prototype has it. Urgency here
+              comes from weight, size and the plate — never from red, which
+              means price direction on the chart and nothing anywhere else. */}
+          <span className="text-2xs shrink-0 border border-paper px-1.5 py-0.5 font-pixel font-bold">
             SURGE {formatMultiplier(quote.multiplierCm)}×
-          </span>{" "}
-          — {quote.queuedHours}h are queued on this slot, which is what lifts the rate above base.
-          Your rate is locked at checkout and will not move afterwards.
-        </Plate>
+          </span>
+          <span className="flex-1 leading-[1.6]">
+            {quote.queuedHours}h are queued on this slot, which is what lifts the rate above base.
+            Your rate is locked at checkout and will not move afterwards.
+          </span>
+        </div>
       )}
 
       <Plate surface="note" className="text-md mt-2 border-2 px-3 py-2 shadow-none">

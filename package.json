@@ -25,7 +25,7 @@
     "check:prices": "node scripts/check-no-price-literals.mjs",
     "pretest:e2e": "npm run build",
     "scenarios": "tsx scripts/scenarios.ts",
-    "fidelity": "node scripts/fidelity.mjs"
+    "fidelity": "tsx scripts/fidelity.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.1",

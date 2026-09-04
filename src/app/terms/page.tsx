@@ -1,5 +1,5 @@
 import { Plate } from "@/components/ui/plate";
-import { SiteFooter } from "@/components/ui/site-footer";
+import { SiteFooter, SiteHeader } from "@/components/ui/site-chrome";
 import { TitleBar } from "@/components/ui/title-bar";
 import { QUEUE_CAP_HOURS } from "@/lib/pricing";
 
@@ -35,7 +35,9 @@ function Rule({ heading, children }: { heading: string; children: React.ReactNod
 
 export default function TermsPage() {
   return (
-    <main className="mx-auto flex max-w-[720px] flex-col px-2 pt-4 pb-10">
+    <main className="mx-auto flex max-w-[720px] flex-col px-2 pt-2.5 pb-10">
+      <SiteHeader />
+
       <h1 className="text-2xl mt-0 mb-3 font-bold text-paper">The rules</h1>
 
       <Plate className="p-[3px]">
