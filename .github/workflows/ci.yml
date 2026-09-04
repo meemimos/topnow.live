@@ -26,6 +26,12 @@ env:
   # value is inlined at build time, so it has to be set for the build step too,
   # which is why it lives at workflow level rather than on one step.
   NEXT_PUBLIC_MARKET_PANEL_ENABLED: "true"
+  # Fixtures, not credentials: the admin surface only exists when these are set,
+  # and #17's tests need it to exist. The password behind the hash is published
+  # in .env.example — a real deployment replaces all three.
+  ADMIN_USERNAME: admin
+  ADMIN_PASSWORD_HASH: scrypt:16384:8:1:mIjb3dr-GGv6yE55CAa-zw:IqL1mEbSLLRWX9dsD3z5J6gNO7cwYv31mEqqfCGzpUo
+  ADMIN_SESSION_SECRET: admin-session-secret-placeholder-for-continuous-integration
 
 jobs:
   verify:

@@ -83,6 +83,23 @@ const serverSchema = z.object({
    * because only the deployment knows the answer.
    */
   RATE_LIMIT_TRUSTED_PROXIES: z.coerce.number().int().min(1).max(8).default(1),
+
+  /**
+   * The admin surface (#17).
+   *
+   * All three default to values that leave the surface **switched off**, and
+   * that is the important property: an admin panel whose default is "reachable"
+   * is one that ships reachable the first time somebody forgets a variable.
+   * `adminConfigured()` below is the single gate, and every admin route asks it
+   * before doing anything else.
+   *
+   * The password is stored as a scrypt hash, never as a password — see
+   * src/lib/admin/password.ts, and scripts/admin-password.mjs for producing one.
+   */
+  ADMIN_USERNAME: z.string().default("admin"),
+  ADMIN_PASSWORD_HASH: z.string().default(""),
+  /** Signs the session cookie. Rotating it signs every operator out. */
+  ADMIN_SESSION_SECRET: z.string().default(""),
 });
 
 /**
@@ -123,6 +140,21 @@ const PLACEHOLDER_MARKER = "placeholder";
 export function stripeConfigured(): boolean {
   const { STRIPE_SECRET_KEY } = serverConfig();
   return !STRIPE_SECRET_KEY.includes(PLACEHOLDER_MARKER);
+}
+
+/**
+ * Whether the admin surface exists at all.
+ *
+ * False until a password hash and a session secret are both supplied. While it
+ * is false the admin routes answer as though they were not routes — see
+ * src/lib/admin/auth.ts — because "not configured" must not be a different,
+ * more forgiving state than "not signed in".
+ */
+export function adminConfigured(): boolean {
+  const { ADMIN_PASSWORD_HASH, ADMIN_SESSION_SECRET, ADMIN_USERNAME } = serverConfig();
+  return (
+    ADMIN_PASSWORD_HASH.length > 0 && ADMIN_SESSION_SECRET.length >= 32 && ADMIN_USERNAME.length > 0
+  );
 }
 
 export type ServerConfig = z.infer<typeof serverSchema>;

@@ -20,8 +20,8 @@ const SERVER_ONLY_VARS = [
   "STRIPE_SECRET_KEY",
   "STRIPE_WEBHOOK_SECRET",
   "CRON_SECRET",
-  "ADMIN_PASSWORD",
-  "ADMIN_SECRET",
+  "ADMIN_PASSWORD_HASH",
+  "ADMIN_SESSION_SECRET",
 ];
 
 // Shapes that are secrets regardless of which variable carried them.

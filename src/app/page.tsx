@@ -8,6 +8,7 @@ import { MarketPanel } from "@/components/market/market";
 import { PricingDialog } from "@/components/pricing/pricing-dialog";
 import { Ticker } from "@/components/ticker/ticker";
 import { BevelButton } from "@/components/ui/bevel-button";
+import { SiteFooter } from "@/components/ui/site-footer";
 import { readAvatars } from "@/lib/avatar/store";
 import { readEmbed } from "@/lib/embed/store";
 import { clientConfig } from "@/lib/config/client";
@@ -101,6 +102,7 @@ export default async function Home() {
         {/* Below both the board and the ledger, deliberately (#12): the chart
             corroborates the board, it does not sell the slot. */}
         {market && <MarketPanel market={market} now={now} />}
+        <SiteFooter />
       </main>
     </ServerClockProvider>
   );

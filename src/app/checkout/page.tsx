@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { CheckoutFlow } from "@/components/checkout/flow";
 import { ServerClockProvider } from "@/components/clock/provider";
 import { Plate } from "@/components/ui/plate";
+import { SiteFooter } from "@/components/ui/site-footer";
 import { TitleBar } from "@/components/ui/title-bar";
 import { serverNow } from "@/lib/time/server";
 
@@ -21,6 +22,7 @@ export default function CheckoutPage() {
           <TitleBar meta="STEP 1 OF 2">THE METER</TitleBar>
           <CheckoutFlow />
         </Plate>
+        <SiteFooter />
       </main>
     </ServerClockProvider>
   );

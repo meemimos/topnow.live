@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import type { CheckoutQuote } from "@/app/actions/checkout";
 import { QueuePosition } from "@/components/checkout/queue-position";
 import { BevelButton } from "@/components/ui/bevel-button";
@@ -111,6 +113,14 @@ export function Receipt({
       <p className="text-md mt-2 mb-0 leading-[1.6] text-ink-soft">
         The meter starts the moment payment clears. No renewals, no auto-extend — when it hits zero
         you&rsquo;re off the board.
+      </p>
+
+      {/* Decision D4, stated before payment rather than at the moment it bites.
+          A rule nobody was told about is a worse outcome than the rule itself,
+          and this is the one a taken-down listing will ask about first. */}
+      <p className="text-md mt-2 mb-0 leading-[1.6] text-ink-soft" data-forfeit-notice>
+        List an account you control. A listing that breaks the <Link href="/terms">rules</Link>{" "}
+        comes off the board, and the time left on it is not refunded.
       </p>
     </div>
   );

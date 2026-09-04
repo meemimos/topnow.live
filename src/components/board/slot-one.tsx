@@ -4,6 +4,7 @@ import { EmbeddedPost } from "@/components/board/embedded-post";
 import { Meter } from "@/components/board/meter";
 import { Avatar } from "@/components/board/avatar";
 import { PLATFORMS, displayNameFor, linkTextFor } from "@/components/board/platform";
+import { ReportListing } from "@/components/report/report-listing";
 import { BevelButton } from "@/components/ui/bevel-button";
 import { Plate } from "@/components/ui/plate";
 import { TitleBar } from "@/components/ui/title-bar";
@@ -114,6 +115,10 @@ export function SlotOne({
           <BevelButton size="lg" disabled={cta.disabled}>
             {cta.label}
           </BevelButton>
+
+          {/* Quiet, and last. Findable when something is wrong; not an
+              invitation to doubt a listing somebody paid for (#17). */}
+          <ReportListing purchaseId={live.id} name={displayNameFor(live)} />
         </div>
       </div>
     </Plate>

@@ -60,10 +60,16 @@ async function live(slot: Slot, durationH: DurationHours, startsAt: Date, handle
 }
 
 beforeEach(async () => {
+  // Reports and audit records reference purchases; both are cleared first so a
+  // kill in one test cannot leave an audit entry another one counts.
+  await db.adminAction.deleteMany();
+  await db.report.deleteMany();
   await db.purchase.deleteMany();
 });
 
 afterAll(async () => {
+  await db.adminAction.deleteMany();
+  await db.report.deleteMany();
   await db.purchase.deleteMany();
   await db.$disconnect();
 });
@@ -346,7 +352,11 @@ describe("killing a listing (#17)", () => {
     const running = await live(1, 6, new Date(NOW.getTime() - HOUR), "impersonator");
     await queue(1, 3, 30, "next_up");
 
-    const { killed, promoted } = await killPurchase(running.id, "impersonation", NOW);
+    const { killed, promoted } = await killPurchase(running.id, {
+      reason: "impersonation",
+      actor: "ops",
+      now: NOW,
+    });
 
     expect(killed.status).toBe("killed");
     expect(killed.killedAt).toEqual(NOW);
@@ -356,7 +366,7 @@ describe("killing a listing (#17)", () => {
 
   it("keeps the killed row in the ledger rather than deleting it", async () => {
     const running = await live(1, 6, new Date(NOW.getTime() - HOUR), "impersonator");
-    await killPurchase(running.id, "impersonation", NOW);
+    await killPurchase(running.id, { reason: "impersonation", actor: "ops", now: NOW });
 
     const stored = await db.purchase.findUniqueOrThrow({ where: { id: running.id } });
     expect(stored.status).toBe("killed");
@@ -379,7 +389,9 @@ describe("killing a listing (#17)", () => {
       }),
     });
 
-    await expect(killPurchase(ended.id, "too late", NOW)).rejects.toThrow(NotKillableError);
+    await expect(
+      killPurchase(ended.id, { reason: "too late", actor: "ops", now: NOW }),
+    ).rejects.toThrow(NotKillableError);
     expect((await tape()).map((r) => r.handle)).toContain("finished");
   });
 
@@ -387,23 +399,123 @@ describe("killing a listing (#17)", () => {
   // reason with the second attempt's.
   it("refuses to kill the same listing twice", async () => {
     const running = await live(1, 6, new Date(NOW.getTime() - HOUR), "impersonator");
-    await killPurchase(running.id, "impersonation", NOW);
+    await killPurchase(running.id, { reason: "impersonation", actor: "ops", now: NOW });
 
     const later = new Date(NOW.getTime() + 60_000);
-    await expect(killPurchase(running.id, "changed my mind", later)).rejects.toThrow(
-      NotKillableError,
-    );
+    await expect(
+      killPurchase(running.id, { reason: "changed my mind", actor: "ops", now: later }),
+    ).rejects.toThrow(NotKillableError);
 
     const stored = await db.purchase.findUniqueOrThrow({ where: { id: running.id } });
     expect(stored.killedAt).toEqual(NOW);
     expect(stored.killedReason).toBe("impersonation");
   });
 
+  it("writes an audit record naming who, when, what and why", async () => {
+    const running = await live(1, 6, new Date(NOW.getTime() - HOUR), "impersonator");
+    await killPurchase(running.id, { reason: "impersonation", actor: "ops", now: NOW });
+
+    const [entry] = await db.adminAction.findMany();
+    // This is the record that matters if a takedown is ever challenged, so all
+    // four parts of the question have to be answerable from one row.
+    expect(entry).toMatchObject({
+      kind: "kill",
+      actor: "ops",
+      purchaseId: running.id,
+      reason: "impersonation",
+    });
+  });
+
+  it("writes the audit record in the same transaction as the kill", async () => {
+    const running = await live(1, 6, new Date(NOW.getTime() - HOUR), "impersonator");
+
+    // A blank actor violates `admin_action_actor_present`, so the audit insert
+    // is what fails — after the row has already been updated to killed. If the
+    // two were separate calls, the listing would now be off the board with no
+    // record of who took it down, which is the one case the trail exists for.
+    await expect(
+      killPurchase(running.id, { reason: "impersonation", actor: "   ", now: NOW }),
+    ).rejects.toThrow();
+
+    expect((await db.purchase.findUniqueOrThrow({ where: { id: running.id } })).status).toBe(
+      "live",
+    );
+    expect(await db.adminAction.count()).toBe(0);
+  });
+
+  it("closes the reports it answers", async () => {
+    const running = await live(1, 6, new Date(NOW.getTime() - HOUR), "impersonator");
+    await db.report.createMany({
+      data: [
+        { purchaseId: running.id, reason: "impersonation", reporterHash: "a".repeat(64) },
+        { purchaseId: running.id, reason: "impersonation", reporterHash: "b".repeat(64) },
+      ],
+    });
+
+    const { reportsUpheld } = await killPurchase(running.id, {
+      reason: "impersonation",
+      actor: "ops",
+      now: NOW,
+    });
+
+    expect(reportsUpheld).toBe(2);
+    const reports = await db.report.findMany();
+    expect(reports.every((report) => report.status === "upheld")).toBe(true);
+    expect(reports.every((report) => report.reviewedBy === "ops")).toBe(true);
+  });
+
+  it("does not require a report to have been filed", async () => {
+    // An admin who can see the board can act on what they see.
+    const running = await live(1, 6, new Date(NOW.getTime() - HOUR), "impersonator");
+    const { killed, reportsUpheld } = await killPurchase(running.id, {
+      reason: "obvious malware link",
+      actor: "ops",
+      now: NOW,
+    });
+
+    expect(killed.status).toBe("killed");
+    expect(reportsUpheld).toBe(0);
+  });
+
+  it("moves everyone behind it up, so their estimates recompute", async () => {
+    const running = await live(1, 6, new Date(NOW.getTime() - HOUR), "impersonator");
+    const second = await queue(1, 3, 30, "next_up");
+    const third = await queue(1, 3, 20, "after_that");
+
+    // Before: `after_that` waits for the live rental's five remaining hours plus
+    // three of `next_up`.
+    await killPurchase(running.id, { reason: "impersonation", actor: "ops", now: NOW });
+
+    expect((await liveOnSlot(1, NOW))?.id).toBe(second.id);
+    // And the tail of the queue now waits only for what is genuinely ahead of
+    // it. The estimate is derived from the queue, so freeing the slot is the
+    // whole of the recomputation — there is nothing cached to invalidate.
+    const waiting = await queueForSlot(1);
+    expect(waiting.map((r) => r.id)).toEqual([third.id]);
+  });
+
+  it("keeps the sale in the chart's history", async () => {
+    const running = await live(1, 6, new Date(NOW.getTime() - HOUR), "impersonator");
+    const paid = running.totalPaidCents;
+    await killPurchase(running.id, { reason: "impersonation", actor: "ops", now: NOW });
+
+    // The sale happened. The chart is a record of sales and is not rewritten by
+    // what came after one.
+    const stored = await db.purchase.findUniqueOrThrow({ where: { id: running.id } });
+    expect(stored.totalPaidCents).toBe(paid);
+    expect(stored.priceHrCents).toBe(running.priceHrCents);
+    expect(stored.boughtAt).toEqual(running.boughtAt);
+  });
+
   it("kills from the queue without touching the live rental", async () => {
     await live(1, 6, new Date(NOW.getTime() - HOUR), "running");
     const waiting = await queue(1, 3, 30, "bad_actor");
 
-    const { promoted } = await killPurchase(waiting.id, "malicious link", NOW);
+    const { promoted } = await killPurchase(waiting.id, {
+      reason: "malicious link",
+      actor: "ops",
+      now: NOW,
+    });
 
     expect(promoted).toBeNull();
     expect((await liveOnSlot(1, NOW))?.handle).toBe("running");

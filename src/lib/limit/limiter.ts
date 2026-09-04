@@ -67,8 +67,8 @@ export type LimitDecision = {
 /**
  * A row is deleted once it has certainly refilled, because a bucket whose `tat`
  * is in the past permits exactly what no row at all permits. Expiry is therefore
- * set past the furthest ahead this update could possibly leave `tat`, plus this
- * margin so the cleanup job does not race a request that is mid-flight.
+ * set to the row's own `tat` plus this margin, so the cleanup job cannot race a
+ * request that is mid-flight.
  *
  * Getting that bound wrong would be a silent hole: the pruner would delete a
  * bucket that still had debt and hand a rate-limited caller a fresh budget. The
@@ -128,12 +128,14 @@ export async function consume(options: ConsumeOptions): Promise<LimitDecision> {
   const key = keyFor(bucket, identity, options.salt ?? currentSalt());
   const emissionSec = policy.emissionMs / 1000;
   const toleranceSec = policy.toleranceMs / 1000;
-  const expiresAt = new Date(
-    now.getTime() + policy.toleranceMs + policy.emissionMs + EXPIRY_MARGIN_MS,
-  );
+  const marginSec = EXPIRY_MARGIN_MS / 1000;
+  // Only used to seed a brand-new row, whose `tat` is `now`.
+  const seedExpiry = new Date(now.getTime() + policy.emissionMs + EXPIRY_MARGIN_MS);
+
+  const args = { db, key, now, emissionSec, toleranceSec, marginSec };
 
   try {
-    const taken = await take({ db, key, now, expiresAt, emissionSec, toleranceSec });
+    const taken = await take(args);
     if (taken) return { allowed: true, retryAfterMs: 0, policy };
 
     const existing = await db.rateLimit.findUnique({ where: { key }, select: { tat: true } });
@@ -141,10 +143,10 @@ export async function consume(options: ConsumeOptions): Promise<LimitDecision> {
       // No row, so nothing refused this — the bucket had simply never been used.
       // Seed it and take the first token.
       await db.rateLimit.createMany({
-        data: [{ key, tat: now, expiresAt }],
+        data: [{ key, tat: now, expiresAt: seedExpiry }],
         skipDuplicates: true,
       });
-      const seeded = await take({ db, key, now, expiresAt, emissionSec, toleranceSec });
+      const seeded = await take(args);
       if (seeded) return { allowed: true, retryAfterMs: 0, policy };
       return { allowed: false, retryAfterMs: policy.emissionMs, policy };
     }
@@ -170,17 +172,25 @@ async function take(args: {
   db: PrismaClient;
   key: string;
   now: Date;
-  expiresAt: Date;
   emissionSec: number;
   toleranceSec: number;
+  marginSec: number;
 }): Promise<boolean> {
-  const { db, key, now, expiresAt, emissionSec, toleranceSec } = args;
+  const { db, key, now, emissionSec, toleranceSec, marginSec } = args;
 
+  // The new `tat` expression is written twice rather than once into a variable,
+  // because expiry has to be derived from *this* row's new value. Computing it
+  // in TypeScript from the policy would be right only while the policy is the
+  // one that wrote the row — lower a burst in a deploy and the arithmetic goes
+  // the wrong way, `rate_limit_expires_after_tat` rejects the update, and the
+  // bucket starts failing for as long as the old row survives.
   const rows = await db.$queryRaw<{ tat: Date }[]>`
     UPDATE rate_limit
        SET tat = GREATEST(tat, ${now}::timestamptz)
                  + make_interval(secs => ${emissionSec}::double precision),
-           "expiresAt" = ${expiresAt}::timestamptz
+           "expiresAt" = GREATEST(tat, ${now}::timestamptz)
+                 + make_interval(secs => ${emissionSec}::double precision)
+                 + make_interval(secs => ${marginSec}::double precision)
      WHERE key = ${key}
        AND GREATEST(tat, ${now}::timestamptz)
            + make_interval(secs => ${emissionSec}::double precision)
