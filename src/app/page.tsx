@@ -6,6 +6,7 @@ import { ServerClockProvider } from "@/components/clock/provider";
 import { LedgerTable } from "@/components/ledger/ledger";
 import { MarketPanel } from "@/components/market/market";
 import { PricingDialog } from "@/components/pricing/pricing-dialog";
+import { Ticker } from "@/components/ticker/ticker";
 import { BevelButton } from "@/components/ui/bevel-button";
 import { readAvatars } from "@/lib/avatar/store";
 import { readEmbed } from "@/lib/embed/store";
@@ -14,6 +15,7 @@ import { readMarket } from "@/lib/market/read";
 import { DURATION_HOURS, askHrCents, baseHrCents } from "@/lib/pricing";
 import { currentAsks } from "@/lib/purchase/queue";
 import { currentBoard, readLedger } from "@/lib/purchase/state";
+import { readTicker } from "@/lib/ticker/read";
 import { serverNow } from "@/lib/time/server";
 import { readCounts, recordVisit } from "@/lib/visits/store";
 
@@ -56,6 +58,11 @@ export default async function Home() {
   await recordVisit(await headers(), new Date(now));
   const counts = await readCounts(new Date(now));
 
+  // What has actually happened (#16). Derived from purchase transitions and
+  // hourly samples — there is no events table, so a quiet board simply produces
+  // a quiet strip rather than one somebody could have filled.
+  const activity = await readTicker(new Date(now));
+
   return (
     <ServerClockProvider serverNow={now}>
       <main className="mx-auto flex max-w-[1020px] flex-col px-2 pt-2.5 pb-10">
@@ -88,6 +95,7 @@ export default async function Home() {
         </header>
 
         <Board slots={slots} now={now} avatars={avatars} embed={embed} />
+        <Ticker events={activity} />
         <Counters counts={counts} />
         <LedgerTable ledger={ledger} />
         {/* Below both the board and the ledger, deliberately (#12): the chart
