@@ -5,7 +5,7 @@
  * the derivation printed under it can never disagree — they are produced from
  * one quote, in one place. #9 (receipt) and #14 (pricing dialog) both call these.
  */
-import { BASE_MULTIPLIER_CM } from "./constants";
+import { BASE_MULTIPLIER_CM, MAX_MULTIPLIER_CM, QUEUE_CAP_HOURS } from "./constants";
 import type { Quote } from "./index";
 
 /** `2505` -> `"25.05"`. No currency symbol. */
@@ -68,3 +68,40 @@ export function slotLabel(slot: number): string {
 export function hasSurge(multiplierCm: number): boolean {
   return multiplierCm > BASE_MULTIPLIER_CM;
 }
+
+/**
+ * How surge actually moves, in the terms the engine actually uses (#14).
+ *
+ * The prototype's wording — "every person who joins a slot's queue pushes that
+ * slot's surge up" — describes head count, and the implemented model is driven
+ * by **queued hours** (decision D2). Under head count, four people booking one
+ * hour each would move the price as much as four booking a day each, which is
+ * not what happens and not what a buyer would see.
+ *
+ * Generated from the constants rather than written out, so the sentence cannot
+ * drift from the model: change the cap and this copy changes with it.
+ */
+export function surgeExplanation(): string {
+  return (
+    `Surge is driven by the hours queued on a slot, not by how many people are ` +
+    `waiting — four people booking an hour each move it far less than four ` +
+    `booking a day each. Every queued hour lifts the rate, reaching the ${formatMultiplier(MAX_MULTIPLIER_CM)}× ` +
+    `ceiling at ${QUEUE_CAP_HOURS} queued hours, which is also the point a slot stops ` +
+    `accepting bookings. An unsold hour pulls the rate back toward base, so it ` +
+    `climbs with demand and only time brings it down.`
+  );
+}
+
+/** The flat-rate rule, with the cap stated (#14). */
+export function flatRateRule(): string {
+  return (
+    `The rate is flat per hour. Six hours costs exactly six times one hour — no ` +
+    `bulk discount, no long-hold premium. Surge is capped at ${formatMultiplier(MAX_MULTIPLIER_CM)}× and only ` +
+    `rises while a slot's queue is deep.`
+  );
+}
+
+/** The opening line: the whole model in one sentence. */
+export const PRICING_OPENING =
+  "You pay a rate per hour, multiplied by the hours you book, multiplied by the " +
+  "slot's current surge. Nothing compounds and nothing is hidden.";

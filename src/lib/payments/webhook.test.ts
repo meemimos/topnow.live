@@ -18,7 +18,24 @@ import { InvalidSessionMetadataError, handleStripeEvent, parseSessionMetadata } 
 
 const db = getDb();
 const SECRET = "whsec_placeholder_not_a_real_secret";
-const NOW = new Date("2026-09-01T12:00:00.000Z");
+/**
+ * The moment the handler runs, captured once.
+ *
+ * Real time rather than a pinned date, and that is load-bearing twice over:
+ *
+ *   - Stripe verifies a signature's timestamp against the *real* clock with a
+ *     300-second tolerance, so a payload signed at a fixed date starts failing
+ *     the moment real time passes it. A pinned date here is a test that works
+ *     until it silently does not.
+ *   - `boughtAt` is stamped by the database with `CURRENT_TIMESTAMP`. If `NOW`
+ *     were behind that, a purchase would be promoted with `startsAt` after
+ *     `NOW`, and the window would not contain `NOW` — so the rental would look
+ *     un-live to a read that is meant to see it.
+ *
+ * No assertion in this file depends on a particular calendar date; every one is
+ * about the relationship between this instant and what the handler wrote.
+ */
+const NOW = new Date();
 
 function metadataFor(slot: 1 | 2 | 3, durationH: 1 | 3 | 6 | 12 | 24, handle: string) {
   const q = quoteForQueue(slot, durationH, 0);
@@ -57,8 +74,13 @@ function completedSessionEvent(
   };
 }
 
-/** Signs a payload exactly as Stripe does, using Stripe's own helper. */
-function sign(payload: string, timestamp = Math.floor(NOW.getTime() / 1000)) {
+/**
+ * Signs a payload exactly as Stripe does, using Stripe's own helper.
+ *
+ * Defaults to the real clock rather than `NOW`, because freshness is checked at
+ * verification time — the tests that want a stale signature pass one explicitly.
+ */
+function sign(payload: string, timestamp = Math.floor(Date.now() / 1000)) {
   return Stripe.webhooks.generateTestHeaderString({ payload, secret: SECRET, timestamp });
 }
 
@@ -187,7 +209,11 @@ describe("a purchase exists only once payment clears", () => {
     const event = completedSessionEvent("cs_live", metadataFor(2, 3, "firstin"));
     await handleStripeEvent(event as never, fakeGateway(), NOW);
 
-    expect((await liveOnSlot(2, NOW))?.handle).toBe("firstin");
+    // Read with a fresh clock, as a real request does. `boughtAt` is stamped by
+    // the database, so promotion clamps `startsAt` to it rather than to `NOW`
+    // (see the skew note in promoteWithin) — and a read pinned to an instant
+    // before that insert would miss a rental that is genuinely on the board.
+    expect((await liveOnSlot(2, new Date()))?.handle).toBe("firstin");
   });
 });
 

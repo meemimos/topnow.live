@@ -136,3 +136,19 @@ export function quoteForQueue(
   const fromQueue = surgeFromQueuedHours(queuedHours);
   return quote(slot, durationH, Math.max(fromQueue, currentMultiplierCm ?? fromQueue));
 }
+
+/**
+ * The multiplier a purchase was locked at, recovered from its stored ask.
+ *
+ * A `Purchase` stores `priceHrCents` but not the multiplier that produced it, and
+ * the ledger (#11) has to print `1.70× base` beneath the rate. Deriving it is
+ * exact rather than approximate: base rates are whole dollars, so `askHrCents` is
+ * `(base / 100) * multiplierCm` with nothing rounded away, and this inverts it
+ * cleanly.
+ *
+ * Rounding is kept anyway, so that a base rate later changed to a non-whole-dollar
+ * value degrades to the nearest hundredth instead of printing a long decimal.
+ */
+export function multiplierFromAsk(slot: Slot, ask: number): number {
+  return Math.round((ask * BASE_MULTIPLIER_CM) / baseHrCents(slot));
+}

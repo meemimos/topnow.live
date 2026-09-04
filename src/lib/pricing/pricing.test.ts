@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { PRICING_OPENING, flatRateRule, surgeExplanation } from "./format";
+
 import {
   BASE_MULTIPLIER_CM,
   DURATION_HOURS,
@@ -276,5 +278,55 @@ describe("displayed strings", () => {
         }
       }
     }
+  });
+});
+
+describe("the pricing dialog's copy (#14)", () => {
+  /**
+   * The prototype's wording describes head count, and the implemented model is
+   * driven by queued hours (D2). Under head count four people booking an hour
+   * each would move the price as much as four booking a day each, which is not
+   * what the engine does.
+   */
+  it("describes surge in queued hours, not in people waiting", () => {
+    const copy = surgeExplanation();
+
+    expect(copy).toContain("hours queued");
+    expect(copy).toContain("not by how many people are waiting");
+  });
+
+  it("states the real cap and the real ceiling, from the constants", () => {
+    const copy = surgeExplanation();
+
+    expect(copy).toContain(`${QUEUE_CAP_HOURS} queued hours`);
+    expect(copy).toContain(`${formatMultiplier(MAX_MULTIPLIER_CM)}×`);
+  });
+
+  /** Decay is half the model. Copy that omits it describes a ratchet. */
+  it("says the rate comes back down", () => {
+    expect(surgeExplanation()).toContain("pulls the rate back toward base");
+  });
+
+  it("states the flat-rate rule with no discount and no premium", () => {
+    const copy = flatRateRule();
+
+    expect(copy).toContain("Six hours costs exactly six times one hour");
+    expect(copy).toContain("no bulk discount");
+    expect(copy).toContain("no long-hold premium");
+  });
+
+  it("opens by stating the whole model in one sentence", () => {
+    expect(PRICING_OPENING).toContain("rate per hour");
+    expect(PRICING_OPENING).toContain("hours you book");
+    expect(PRICING_OPENING).toContain("current surge");
+  });
+
+  /**
+   * The copy is generated from the constants, so a changed cap cannot leave the
+   * sentence quoting the old one.
+   */
+  it("cannot drift from the engine", () => {
+    expect(surgeExplanation()).not.toContain("18 queued hours");
+    expect(surgeExplanation()).toContain(String(QUEUE_CAP_HOURS));
   });
 });

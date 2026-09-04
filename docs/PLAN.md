@@ -148,17 +148,20 @@ Consequences to carry through:
 - #12 moves behind #13 in priority; #13 is the launch-day market state.
 - Reveal criterion is twenty hours of _sampled ask_ on a slot (#22), not twenty sales.
 
-## Open question — tape ordering
+## Settled — tape ordering
 
 `docs/build-prompt.md` specifies `tape = status = ended, ordered by bought_at descending`,
 and #11 describes the same section as "ended (newest first) — the tape". With mixed durations
 those two can disagree: a 24h rental bought at 9am ends a day later, yet sorts _below_ a 1h
 rental bought at 10am that ended at 11am.
 
-Implemented as specified (`bought_at` descending), because the spec is explicit and #21
-indexes for it. Flagging rather than changing it silently — if "newest first" is meant to
-track when a rental _ended_, the order should be `ends_at` descending and #21 needs an index
-to match.
+**Resolved by #11's own spec**, which states the ordering per section and requires the section
+headers to explain the reversal: the queue reads `bought_at` **ascending** because the oldest
+purchase goes live next, and the tape reads `bought_at` **descending** because that is how a
+tape reads. Both orders are over `bought_at`, which is what #21 already indexes.
+
+Implemented that way in `buildLedger`, with the copy carrying the explanation — an unexplained
+reversal inside a single table reads as a sorting bug, which is the actual risk here.
 
 ## Standing pushback
 
