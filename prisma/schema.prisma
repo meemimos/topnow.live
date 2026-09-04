@@ -305,3 +305,32 @@ model Visit {
   @@index([lastSeenAt])
   @@map("visit")
 }
+
+/// One rate-limit bucket (#18).
+///
+/// Shared storage, because a limiter held in process memory does nothing behind
+/// more than one server — the second instance simply has its own budget. This is
+/// the store TopNow already has.
+///
+/// One row per bucket per caller, holding a single timestamp: `tat` is the time
+/// the bucket is paid up to. See src/lib/limit/limiter.ts for the algorithm and
+/// for why the decision is an UPDATE rather than a read followed by a write.
+model RateLimit {
+  /// `<bucket>:<truncated sha256 of the salted identity>`. Never an address and
+  /// never a user agent: the limiter needs to tell callers apart and nothing
+  /// more, and a table of visitor IPs is not a thing to accumulate as a side
+  /// effect of a safety feature.
+  key String @id @db.VarChar(128)
+
+  /// Theoretical arrival time — when this bucket is paid up to. A row whose
+  /// `tat` is in the past permits exactly what no row at all permits.
+  tat DateTime @db.Timestamptz(3)
+
+  /// When the bucket has certainly refilled, so the hourly job can delete it.
+  expiresAt DateTime @db.Timestamptz(3)
+
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([expiresAt])
+  @@map("rate_limit")
+}

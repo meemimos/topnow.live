@@ -1,7 +1,9 @@
 import sharp from "sharp";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { serverConfig } from "@/lib/config/server";
 import { getDb } from "@/lib/db";
+import { consume } from "@/lib/limit/limiter";
 import { quoteForQueue } from "@/lib/pricing";
 
 import { REFRESH_AFTER_MS, RETRY_FAILED_AFTER_MS } from "./constants";
@@ -57,12 +59,18 @@ const failing: Transport = async () => ({
 beforeEach(async () => {
   await db.avatar.deleteMany();
   await db.purchase.deleteMany();
+  // Resolution now spends rate-limit budget (#18), and these suites resolve far
+  // more often in a few seconds than any real deployment would. Cleared per test
+  // so a limit reached in one does not silently refuse resolution in the next —
+  // which would look like a caching bug rather than a limit.
+  await db.rateLimit.deleteMany();
   vi.restoreAllMocks();
 });
 
 afterAll(async () => {
   await db.avatar.deleteMany();
   await db.purchase.deleteMany();
+  await db.rateLimit.deleteMany();
 });
 
 describe("avatarKey", () => {
@@ -361,5 +369,68 @@ describe("refreshStaleAvatars", () => {
     // A job that times out half way refreshes the same first rows forever.
     expect(summary.considered).toBe(2);
     expect(transport).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("the resolution limit (#18)", () => {
+  /** Spends the whole avatar budget, so the next resolution is refused. */
+  async function exhaust(now: Date) {
+    const policy = serverConfig().RATE_LIMIT_AVATAR;
+    for (let i = 0; i < policy.burst; i += 1) {
+      await consume({ bucket: "avatar", identity: "github", policy, now });
+    }
+  }
+
+  it("does not spend budget on a cache hit", async () => {
+    const transport = await countingTransport();
+    await ensureAvatar("github", "mira-builds", { now: NOW, transport });
+
+    const afterFirst = await db.rateLimit.findFirst();
+    expect(afterFirst).not.toBeNull();
+
+    for (let i = 0; i < 30; i += 1) {
+      await ensureAvatar("github", "mira-builds", { now: NOW, transport });
+    }
+
+    // The issue is explicit that only actual upstream fetches consume limit.
+    // Otherwise a popular board burns the provider's budget on requests it never
+    // made — and the busier TopNow got, the sooner avatars would stop resolving.
+    expect(transport).toHaveBeenCalledTimes(1);
+    const afterHits = await db.rateLimit.findFirst();
+    expect(afterHits!.tat.getTime()).toBe(afterFirst!.tat.getTime());
+  });
+
+  it("declines to fetch once the budget is spent", async () => {
+    await exhaust(NOW);
+    const transport = await countingTransport();
+
+    expect(await ensureAvatar("github", "mira-builds", { now: NOW, transport })).toBeNull();
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it("does not record the refusal as a fact about the account", async () => {
+    await exhaust(NOW);
+    const transport = await countingTransport();
+    await ensureAvatar("github", "mira-builds", { now: NOW, transport });
+
+    // A `failed` row here would burn an attempt and cache a reason that says
+    // nothing about the handle — and `isStale` would then hold the account back
+    // from being resolved for the retry interval, over a limit that was ours.
+    expect(await db.avatar.count()).toBe(0);
+  });
+
+  it("keeps serving the cached row while resolution is held back", async () => {
+    const transport = await countingTransport();
+    await ensureAvatar("github", "mira-builds", { now: NOW, transport });
+
+    const stale = new Date(NOW.getTime() + REFRESH_AFTER_MS + 1);
+    await exhaust(stale);
+    transport.mockClear();
+
+    const row = await ensureAvatar("github", "mira-builds", { now: stale, transport });
+    // A limit on refreshing must not take a working avatar off the board.
+    expect(row?.status).toBe("ok");
+    expect(row?.large?.byteLength).toBeGreaterThan(0);
+    expect(transport).not.toHaveBeenCalled();
   });
 });

@@ -2,7 +2,9 @@ import "server-only";
 
 import type { Avatar, AvatarStatus, Platform } from "@prisma/client";
 
+import { serverConfig } from "@/lib/config/server";
 import { getDb } from "@/lib/db";
+import { consume } from "@/lib/limit/limiter";
 
 import { REFRESH_AFTER_MS, REFRESH_BUDGET_MS, RETRY_FAILED_AFTER_MS } from "./constants";
 import { resolveAvatar } from "./resolve";
@@ -144,6 +146,29 @@ export async function ensureAvatar(
       where: { platform_handle: { platform, handle } },
     });
     if (existing && !options.force && !isStale(existing, now)) return existing;
+
+    // Only a genuine upstream fetch spends limit (#18): everything above this
+    // line was served from the cache, and charging a cache hit would mean a
+    // popular board burned the provider budget on requests it never made.
+    //
+    // Keyed by platform because that is what the limit protects — GitHub's
+    // avatar host does not care which of our handles is being resolved.
+    const gate = await consume({
+      bucket: "avatar",
+      identity: platform,
+      policy: serverConfig().RATE_LIMIT_AVATAR,
+      now,
+    });
+    if (!gate.allowed) {
+      // Deliberately not written as a `failed` row. A refusal is TopNow pacing
+      // itself, not an answer about this account, and recording it would burn an
+      // attempt and cache a reason that says nothing about the handle.
+      console.warn(
+        `[avatar] ${platform}/${handle} deferred: resolution limit reached, ` +
+          `retry in ${Math.ceil(gate.retryAfterMs / 1000)}s`,
+      );
+      return existing ?? null;
+    }
 
     const outcome = await resolveAvatar(platform, rawHandle, { transport: options.transport });
     const row = rowFor(outcome, { now, previousAttempts: existing?.attempts ?? 0 });

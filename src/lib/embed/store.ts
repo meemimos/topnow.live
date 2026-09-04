@@ -2,7 +2,9 @@ import "server-only";
 
 import type { Embed, EmbedStatus, Platform } from "@prisma/client";
 
+import { serverConfig } from "@/lib/config/server";
 import { getDb } from "@/lib/db";
+import { consume } from "@/lib/limit/limiter";
 import type { Transport } from "@/lib/fetch/net";
 
 import {
@@ -118,6 +120,23 @@ export async function ensureEmbed(
   try {
     const existing = await db.embed.findUnique({ where: { postUrl } });
     if (existing && !options.force && !isStale(existing, now)) return existing;
+
+    // Same rule as the avatar cache (#18): a cache hit costs nothing, only an
+    // actual oEmbed request does. Keyed by platform, because the budget being
+    // protected is the provider's.
+    const gate = await consume({
+      bucket: "embed",
+      identity: platform,
+      policy: serverConfig().RATE_LIMIT_EMBED,
+      now,
+    });
+    if (!gate.allowed) {
+      console.warn(
+        `[embed] ${postUrl} deferred: resolution limit reached, ` +
+          `retry in ${Math.ceil(gate.retryAfterMs / 1000)}s`,
+      );
+      return existing ?? null;
+    }
 
     const outcome = await resolveEmbed(platform, postUrl, { transport: options.transport });
     const row = rowFor(outcome, { now, previousAttempts: existing?.attempts ?? 0 });

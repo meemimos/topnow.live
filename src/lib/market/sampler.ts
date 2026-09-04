@@ -11,6 +11,7 @@ import {
 } from "@/lib/pricing";
 import { refreshStaleAvatars, type RefreshSummary } from "@/lib/avatar/store";
 import { refreshStaleEmbeds, type EmbedRefreshSummary } from "@/lib/embed/store";
+import { pruneExpiredLimits } from "@/lib/limit/limiter";
 import { promoteAll } from "@/lib/purchase/state";
 
 import { latestSampledAsk } from "./ask";
@@ -181,6 +182,8 @@ export type TickResult = {
   promoted: number;
   avatars: RefreshSummary;
   embeds: EmbedRefreshSummary;
+  /** Rate-limit buckets dropped because they had refilled (#18). */
+  limitsPruned: number;
   ranAt: Date;
 };
 
@@ -202,6 +205,11 @@ export async function runHourlyTick(now: Date = new Date()): Promise<TickResult>
   const avatars = await settled(refreshStaleAvatars(now), EMPTY_REFRESH, "avatars");
   const embeds = await settled(refreshStaleEmbeds(now), EMPTY_REFRESH, "embeds");
 
+  // Housekeeping, and safe to skip: a bucket past its expiry permits exactly
+  // what a missing row permits, so a failed prune leaves rows behind and changes
+  // no decision.
+  const limitsPruned = await settled(pruneExpiredLimits(now), 0, "rate limit");
+
   return {
     hour,
     samplesWritten: written.length,
@@ -209,6 +217,7 @@ export async function runHourlyTick(now: Date = new Date()): Promise<TickResult>
     promoted: promoted.length,
     avatars,
     embeds,
+    limitsPruned,
     ranAt: now,
   };
 }

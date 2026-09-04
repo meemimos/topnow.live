@@ -2,6 +2,8 @@ import "server-only";
 
 import { z } from "zod";
 
+import { parsePolicy, type Policy } from "@/lib/limit/policy";
+
 /**
  * Server-side configuration, validated once at boot.
  *
@@ -51,7 +53,61 @@ const serverSchema = z.object({
    */
   STRIPE_SECRET_KEY: z.string({ error: "STRIPE_SECRET_KEY is required" }).min(1),
   STRIPE_WEBHOOK_SECRET: z.string({ error: "STRIPE_WEBHOOK_SECRET is required" }).min(1),
+
+  /**
+   * Rate limits (#18), one per protected surface.
+   *
+   * Written as `count/window+burst` — see src/lib/limit/policy.ts, which is also
+   * where the argument for the burst being part of the syntax lives. Parsed here
+   * so a malformed limit stops the server at boot rather than at the first
+   * request that happens to be limited.
+   *
+   * The defaults are deliberately generous. A limit that catches a real person
+   * is worse than one that lets an abuser through, because the queued-hours cap
+   * (#24) already bounds what flooding the queue can achieve — the limiter is
+   * protecting API quota and third-party budgets, not standing in for the cap.
+   */
+  RATE_LIMIT_CHECKOUT: policy("20/1h+5"),
+  RATE_LIMIT_REPORT: policy("10/1h+3"),
+  RATE_LIMIT_AVATAR: policy("120/1h+20"),
+  RATE_LIMIT_EMBED: policy("120/1h+20"),
+  /** Stricter, and on authentication attempts specifically. */
+  RATE_LIMIT_ADMIN: policy("10/15m+5"),
+
+  /**
+   * How many proxies sit in front of the app.
+   *
+   * Decides which `x-forwarded-for` entry a limit is keyed on — see
+   * src/lib/limit/address.ts. Wrong in one direction it trusts text the client
+   * wrote; wrong in the other it buckets everybody together. It is configuration
+   * because only the deployment knows the answer.
+   */
+  RATE_LIMIT_TRUSTED_PROXIES: z.coerce.number().int().min(1).max(8).default(1),
 });
+
+/**
+ * A rate-limit policy, parsed from its compact string form.
+ *
+ * `z.string().default(...).transform(...)` rather than a plain string, so the
+ * value the rest of the app sees is already a validated policy and there is no
+ * second place where a limit could be parsed differently.
+ */
+function policy(fallback: string) {
+  return z
+    .string()
+    .default(fallback)
+    .transform((text, ctx): Policy => {
+      try {
+        return parsePolicy(text);
+      } catch (error) {
+        ctx.addIssue({
+          code: "custom",
+          message: error instanceof Error ? error.message : "invalid rate limit",
+        });
+        return z.NEVER;
+      }
+    });
+}
 
 /** Values that exist to let the app boot, and must never reach Stripe. */
 const PLACEHOLDER_MARKER = "placeholder";

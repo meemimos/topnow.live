@@ -1,8 +1,10 @@
 import sharp from "sharp";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { serverConfig } from "@/lib/config/server";
 import { getDb } from "@/lib/db";
 import type { Transport } from "@/lib/fetch/net";
+import { consume } from "@/lib/limit/limiter";
 import { quoteForQueue } from "@/lib/pricing";
 
 import { REFRESH_AFTER_MS, RETRY_FAILED_AFTER_MS } from "./constants";
@@ -77,12 +79,18 @@ const deleted: Transport = async () => ({
 beforeEach(async () => {
   await db.embed.deleteMany();
   await db.purchase.deleteMany();
+  // Resolution now spends rate-limit budget (#18), and these suites resolve far
+  // more often in a few seconds than any real deployment would. Cleared per test
+  // so a limit reached in one does not silently refuse resolution in the next —
+  // which would look like a caching bug rather than a limit.
+  await db.rateLimit.deleteMany();
   vi.restoreAllMocks();
 });
 
 afterAll(async () => {
   await db.embed.deleteMany();
   await db.purchase.deleteMany();
+  await db.rateLimit.deleteMany();
 });
 
 describe("ensureEmbed", () => {
@@ -298,5 +306,58 @@ describe("refreshStaleEmbeds", () => {
       resolved: 0,
       failed: 0,
     });
+  });
+});
+
+describe("the resolution limit (#18)", () => {
+  /** Spends the whole oEmbed budget for the platform. */
+  async function exhaust(now: Date) {
+    const policy = serverConfig().RATE_LIMIT_EMBED;
+    for (let i = 0; i < policy.burst; i += 1) {
+      await consume({ bucket: "embed", identity: "youtube", policy, now });
+    }
+  }
+
+  it("does not spend budget on a cache hit", async () => {
+    const transport = await workingTransport();
+    await ensureEmbed("youtube", POST, { now: NOW, transport });
+    const afterFirst = await db.rateLimit.findFirst();
+
+    for (let i = 0; i < 30; i += 1) {
+      await ensureEmbed("youtube", POST, { now: NOW, transport });
+    }
+
+    const afterHits = await db.rateLimit.findFirst();
+    expect(afterHits!.tat.getTime()).toBe(afterFirst!.tat.getTime());
+  });
+
+  it("declines to ask the provider once the budget is spent", async () => {
+    await exhaust(NOW);
+    const transport = await workingTransport();
+
+    expect(await ensureEmbed("youtube", POST, { now: NOW, transport })).toBeNull();
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it("does not cache the refusal as a fact about the post", async () => {
+    await exhaust(NOW);
+    await ensureEmbed("youtube", POST, { now: NOW, transport: await workingTransport() });
+
+    // A `failed` row would hold the post back for the retry interval over a
+    // limit that was TopNow's rather than the provider's.
+    expect(await db.embed.count()).toBe(0);
+  });
+
+  it("keeps rendering the cached embed while resolution is held back", async () => {
+    const transport = await workingTransport();
+    await ensureEmbed("youtube", POST, { now: NOW, transport });
+
+    const stale = new Date(NOW.getTime() + REFRESH_AFTER_MS + 1);
+    await exhaust(stale);
+    transport.mockClear();
+
+    const row = await ensureEmbed("youtube", POST, { now: stale, transport });
+    expect(row?.status).toBe("ok");
+    expect(transport).not.toHaveBeenCalled();
   });
 });
