@@ -1,11 +1,12 @@
 import type { Purchase } from "@prisma/client";
 
 import { Meter } from "@/components/board/meter";
-import { AvatarPlaceholder } from "@/components/board/avatar";
+import { Avatar } from "@/components/board/avatar";
 import { PLATFORMS, displayNameFor, linkTextFor } from "@/components/board/platform";
 import { BevelButton } from "@/components/ui/bevel-button";
 import { Plate } from "@/components/ui/plate";
 import { TitleBar } from "@/components/ui/title-bar";
+import type { BoardAvatar } from "@/lib/avatar/store";
 import { formatMoney } from "@/lib/pricing/format";
 import { formatClock } from "@/lib/time";
 
@@ -26,10 +27,13 @@ import { formatClock } from "@/lib/time";
  */
 export function SlotOne({
   live,
+  avatar,
   queuedCount,
   cta,
 }: {
   live: Purchase;
+  /** Undefined when nothing resolved — the placeholder renders instead (#19). */
+  avatar: BoardAvatar | undefined;
   queuedCount: number;
   cta: { label: string; disabled?: boolean };
 }) {
@@ -47,7 +51,7 @@ export function SlotOne({
         <div className="flex min-w-[250px] flex-[1_1_300px] flex-col">
           <Plate variant="inset" surface="paper" className="h-full p-3">
             <div className="flex items-start gap-3">
-              <AvatarPlaceholder size="large" />
+              <Avatar avatar={avatar} size="large" />
 
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-[7px]">

@@ -136,3 +136,66 @@ model AskSample {
   @@index([slot, hour])
   @@map("ask_sample")
 }
+
+enum AvatarStatus {
+  /// Bytes were fetched, validated and re-encoded. `large` and `small` are set.
+  ok
+  /// There is no avatar to fetch, and asking again will not change that:
+  /// no resolver for the platform, a website listing, or a handle whose
+  /// upstream response was not an image.
+  unavailable
+  /// Something transient — a timeout, a 5xx, a blocked address. Retried on the
+  /// schedule in constants.ts, never on a page read.
+  failed
+}
+
+/// TopNow's own copy of a listing's avatar (#19).
+///
+/// The board never causes a third-party request: it reads this table, and the
+/// bytes are served from /api/avatar. Resolution happens on purchase creation
+/// and on the hourly refresh, never on a read.
+///
+/// Keyed by platform and handle rather than by purchase, because the same
+/// account can rent a slot many times and each rental should not re-fetch.
+/// `handle` is stored lowercased — see `avatarKey`.
+model Avatar {
+  id String @id @default(uuid()) @db.Uuid
+
+  platform Platform
+  handle   String   @db.VarChar(64)
+
+  status AvatarStatus
+
+  /// Always image/webp when status is ok. Nullable because a row that failed has
+  /// no bytes to describe.
+  contentType String? @db.VarChar(64)
+
+  /// Re-encoded, metadata stripped, at the two sizes the board actually renders.
+  /// Never the upstream bytes.
+  large Bytes?
+  small Bytes?
+
+  /// The URL the bytes finally came from, after redirects. For debugging a bad
+  /// resolution without keeping the response.
+  sourceUrl String? @db.VarChar(2048)
+
+  /// Why a non-ok row is not ok. Short, and never the upstream body.
+  failureReason String? @db.VarChar(500)
+
+  /// Consecutive failures. Kept so a permanently broken handle is visible as a
+  /// number rather than as a pattern in the logs.
+  attempts Int @default(0)
+
+  /// When resolution last ran, successfully or not. Drives the refresh schedule.
+  resolvedAt DateTime @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  /// One row per account. This is what makes resolution idempotent under
+  /// concurrent webhook deliveries for the same handle.
+  @@unique([platform, handle])
+  /// The refresh job scans by staleness.
+  @@index([status, resolvedAt])
+  @@map("avatar")
+}

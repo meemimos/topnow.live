@@ -4,6 +4,7 @@ import { LedgerTable } from "@/components/ledger/ledger";
 import { MarketPanel } from "@/components/market/market";
 import { PricingDialog } from "@/components/pricing/pricing-dialog";
 import { BevelButton } from "@/components/ui/bevel-button";
+import { readAvatars } from "@/lib/avatar/store";
 import { clientConfig } from "@/lib/config/client";
 import { readMarket } from "@/lib/market/read";
 import { DURATION_HOURS, askHrCents, baseHrCents } from "@/lib/pricing";
@@ -32,6 +33,11 @@ export default async function Home() {
   // The pricing dialog quotes the same ask checkout would charge, read per
   // request — a static price list beside a surging board is worse than none.
   const asks = await currentAsks(DURATION_HOURS, new Date(now));
+
+  // TopNow's own avatar copies (#19). A read, never a resolution: the board must
+  // not make a third-party request, and a page render must not be able to spend
+  // an upstream rate-limit budget.
+  const avatars = await readAvatars(slots.flatMap((slot) => (slot.live ? [slot.live] : [])));
 
   return (
     <ServerClockProvider serverNow={now}>
@@ -64,7 +70,7 @@ export default async function Home() {
           </div>
         </header>
 
-        <Board slots={slots} now={now} />
+        <Board slots={slots} now={now} avatars={avatars} />
         <LedgerTable ledger={ledger} />
         {/* Below both the board and the ledger, deliberately (#12): the chart
             corroborates the board, it does not sell the slot. */}

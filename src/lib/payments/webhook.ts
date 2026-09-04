@@ -3,6 +3,7 @@ import "server-only";
 import { Prisma } from "@prisma/client";
 import type Stripe from "stripe";
 
+import { ensureAvatar } from "@/lib/avatar/store";
 import { isDurationHours, isSlot, type DurationHours, type Slot } from "@/lib/pricing";
 import {
   QueueAtCapacityError,
@@ -177,6 +178,16 @@ async function handleCompletedSession(
     // The slot may be free right now, in which case this listing goes live
     // immediately rather than waiting for a read or the hourly job.
     await promoteSlot(metadata.slot, now);
+
+    // Resolve the avatar here, because this is the submit (#19): it is the one
+    // moment the product learns about a new account, and resolving anywhere
+    // downstream would mean resolving on a read.
+    //
+    // Awaited rather than left dangling — a promise nobody holds can be killed
+    // by the runtime the instant this handler returns — but it cannot throw and
+    // cannot fail the webhook. A listing whose avatar did not resolve is a
+    // listing with the placeholder, which is a designed state.
+    await ensureAvatar(metadata.platform, metadata.handle, { now });
 
     return { kind: "created", purchaseId: purchase.id };
   } catch (error) {

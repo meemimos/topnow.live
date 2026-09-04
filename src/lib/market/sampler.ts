@@ -9,6 +9,7 @@ import {
   surgeFromQueuedHours,
   type Slot,
 } from "@/lib/pricing";
+import { refreshStaleAvatars, type RefreshSummary } from "@/lib/avatar/store";
 import { promoteAll } from "@/lib/purchase/state";
 
 import { latestSampledAsk } from "./ask";
@@ -37,6 +38,9 @@ import { latestSampledAsk } from "./ask";
  * 3. Nudges promotion, so a slot freeing at 3am does not wait for a visitor.
  *    An optimisation, not a correctness requirement — the same transaction #1
  *    would run on the next read, just triggered earlier.
+ * 4. Refreshes stale avatars (#19). This is the *only* scheduled resolution
+ *    point; a board render must never cause a third-party request, so the
+ *    refresh has to live behind a clock rather than behind a visitor.
  */
 
 const MS_PER_HOUR = 3_600_000;
@@ -161,6 +165,7 @@ export type TickResult = {
   samplesWritten: number;
   samplesSkipped: number;
   promoted: number;
+  avatars: RefreshSummary;
   ranAt: Date;
 };
 
@@ -174,11 +179,17 @@ export async function runHourlyTick(now: Date = new Date()): Promise<TickResult>
   const promoted = await promoteAll(now);
   const { hour, written, skipped } = await sampleAsks(now);
 
+  // Last, and unable to throw. The sample is the part of this job that the chart
+  // depends on; an avatar host having a bad hour must not cost the series an
+  // hour it can never get back.
+  const avatars = await refreshStaleAvatars(now);
+
   return {
     hour,
     samplesWritten: written.length,
     samplesSkipped: skipped.length,
     promoted: promoted.length,
+    avatars,
     ranAt: now,
   };
 }
