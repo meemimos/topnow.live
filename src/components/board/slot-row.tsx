@@ -6,6 +6,7 @@ import { PLATFORMS, displayNameFor, linkTextFor } from "@/components/board/platf
 import { BevelButton } from "@/components/ui/bevel-button";
 import { Plate, VacantPlate } from "@/components/ui/plate";
 import type { BoardAvatar } from "@/lib/avatar/store";
+import { clickThroughHref } from "@/lib/embed/clicks";
 
 /**
  * Slots 02 and 03 (#6): a compact row, structurally distinct from slot 01.
@@ -42,9 +43,10 @@ export function SlotRow({
         <div className="text-md mt-0.5 leading-[1.5]">{live.tagline}</div>
       </div>
 
+      {/* Counted, like slot 01's (#20). */}
       <a
         className="text-[11.5px] shrink-0 break-all"
-        href={live.targetUrl}
+        href={clickThroughHref(live.id)}
         rel="nofollow ugc noopener noreferrer"
         target="_blank"
       >

@@ -1,7 +1,7 @@
 import sharp from "sharp";
 import { describe, expect, it, vi } from "vitest";
 
-import { fetchImageBytes, type Transport } from "./net";
+import { fetchBytes, type Transport } from "@/lib/fetch/net";
 import { NO_RESOLVER_REASON, RESOLVERS, resolveAvatar } from "./resolve";
 
 /**
@@ -173,7 +173,7 @@ describe("SSRF targets are refused by the real fetch path", () => {
     // Asserting on the *reason* rather than merely on rejection: a TLS or
     // connect error would also reject, and would mean the packet had already
     // gone out. Matching the classifier's own words is what proves it did not.
-    await expect(fetchImageBytes(url, openAllowList)).rejects.toThrow(reason);
+    await expect(fetchBytes(url, openAllowList)).rejects.toThrow(reason);
   });
 
   it("refuses an IP literal even though Node skips DNS for one", async () => {
@@ -181,7 +181,7 @@ describe("SSRF targets are refused by the real fetch path", () => {
     // address bypasses it. The URL check is what closes that, and this is the
     // case that found it.
     await expect(
-      fetchImageBytes("https://169.254.169.254/latest/meta-data/", openAllowList),
+      fetchBytes("https://169.254.169.254/latest/meta-data/", openAllowList),
     ).rejects.toThrow(/Refused to fetch/);
   });
 });

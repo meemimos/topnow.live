@@ -5,7 +5,7 @@ import { getDb } from "@/lib/db";
 import { quoteForQueue } from "@/lib/pricing";
 
 import { REFRESH_AFTER_MS, RETRY_FAILED_AFTER_MS } from "./constants";
-import type { Transport } from "./net";
+import type { Transport } from "@/lib/fetch/net";
 import {
   avatarKey,
   avatarLookupKey,

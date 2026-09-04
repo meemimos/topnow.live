@@ -3,7 +3,11 @@ import "server-only";
 import { Prisma } from "@prisma/client";
 import type Stripe from "stripe";
 
+import type { Platform } from "@prisma/client";
+
 import { ensureAvatar } from "@/lib/avatar/store";
+import { isValidPostUrl } from "@/lib/embed/providers";
+import { ensureEmbed } from "@/lib/embed/store";
 import { isDurationHours, isSlot, type DurationHours, type Slot } from "@/lib/pricing";
 import {
   QueueAtCapacityError,
@@ -32,6 +36,8 @@ export type SessionMetadata = {
   platform: "github" | "youtube" | "instagram" | "tiktok" | "reddit" | "web";
   displayName: string | null;
   targetUrl: string;
+  /** The post to embed on slot 01 (#20). Null for a listing without one. */
+  postUrl: string | null;
   tagline: string;
   /** Locked at checkout. Never recomputed here. */
   priceHrCents: number;
@@ -77,6 +83,12 @@ export function parseSessionMetadata(raw: Record<string, string> | null): Sessio
   if (!raw.targetUrl?.startsWith("https://")) {
     throw new InvalidSessionMetadataError("targetUrl is not https");
   }
+  // Re-validated rather than trusted, like everything else here: the session
+  // could have been created by an older deploy with looser rules, and this URL
+  // is what an outbound request will later be built from.
+  if (raw.postUrl && !isValidPostUrl(raw.platform as Platform, raw.postUrl)) {
+    throw new InvalidSessionMetadataError("postUrl is not a usable post link");
+  }
 
   return {
     slot,
@@ -85,6 +97,7 @@ export function parseSessionMetadata(raw: Record<string, string> | null): Sessio
     platform: raw.platform as SessionMetadata["platform"],
     displayName: raw.displayName || null,
     targetUrl: raw.targetUrl,
+    postUrl: raw.postUrl || null,
     tagline: raw.tagline ?? "",
     priceHrCents,
     totalPaidCents,
@@ -164,6 +177,7 @@ async function handleCompletedSession(
           platform: metadata.platform,
           displayName: metadata.displayName,
           targetUrl: metadata.targetUrl,
+          postUrl: metadata.postUrl,
           tagline: metadata.tagline,
           // Straight from the locked metadata. Recomputing here would re-price
           // the buyer at whatever surge has since become.
@@ -188,6 +202,13 @@ async function handleCompletedSession(
     // cannot fail the webhook. A listing whose avatar did not resolve is a
     // listing with the placeholder, which is a designed state.
     await ensureAvatar(metadata.platform, metadata.handle, { now });
+
+    // Same reasoning as the avatar: this is the submit, and resolving anywhere
+    // downstream would mean resolving on a read. Also cannot throw — a listing
+    // whose embed did not resolve is a listing that renders as a profile card.
+    if (metadata.postUrl) {
+      await ensureEmbed(metadata.platform, metadata.postUrl, { now });
+    }
 
     return { kind: "created", purchaseId: purchase.id };
   } catch (error) {

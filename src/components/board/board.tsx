@@ -7,6 +7,7 @@ import { DURATION_HOURS, quoteForQueue, type Slot } from "@/lib/pricing";
 import { formatMoney, slotLabel } from "@/lib/pricing/format";
 import { acceptsNewBookings } from "@/lib/purchase/queue";
 import { avatarLookupKey, type BoardAvatar } from "@/lib/avatar/store";
+import type { BoardEmbed } from "@/lib/embed/store";
 import type { BoardSlot } from "@/lib/purchase/state";
 
 /**
@@ -82,6 +83,7 @@ export function Board({
   slots,
   now,
   avatars,
+  embed,
 }: {
   slots: BoardSlot[];
   now: number;
@@ -91,6 +93,11 @@ export function Board({
    * placeholder, which is a designed state rather than a failure.
    */
   avatars: Map<string, BoardAvatar>;
+  /**
+   * Slot 01's post embed (#20), or null when there is nothing renderable. Only
+   * slot 01 has one: the panel is part of what the top slot's premium buys.
+   */
+  embed: BoardEmbed | null;
 }) {
   const [one, two, three] = slots;
 
@@ -109,6 +116,7 @@ export function Board({
         <SlotOne
           live={one.live}
           avatar={avatars.get(avatarLookupKey(one.live))}
+          embed={embed}
           queuedCount={one.queuedCount}
           cta={ctaFor(one, one.queuedHours + remainingHoursOf(one, now))}
         />

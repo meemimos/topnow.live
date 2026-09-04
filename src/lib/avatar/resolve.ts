@@ -4,7 +4,7 @@ import { HANDLE_RULES, isHandlePlatform } from "@/lib/checkout/platforms";
 
 import { storedPixels } from "./constants";
 import { encodeAvatar, NotAnImageError, type EncodedAvatar } from "./image";
-import { BlockedRequestError, fetchImageBytes, type Transport } from "./net";
+import { BlockedRequestError, fetchBytes, type Transport } from "@/lib/fetch/net";
 
 /**
  * Per-platform avatar resolution (#19).
@@ -104,7 +104,7 @@ export async function resolveAvatar(
   let bytes: Uint8Array;
   let sourceUrl: string;
   try {
-    const fetched = await fetchImageBytes(url, {
+    const fetched = await fetchBytes(url, {
       isHostAllowed: (host) => hosts.has(host),
       transport: options.transport,
     });

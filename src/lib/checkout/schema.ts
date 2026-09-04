@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { InvalidPostUrlError, normalisePostUrl, providerFor } from "@/lib/embed/providers";
 import { DURATION_HOURS, SLOTS } from "@/lib/pricing";
 
 import {
@@ -51,6 +52,21 @@ function handleSchema(platform: HandlePlatform) {
     .regex(rule.pattern, rule.requirement);
 }
 
+/**
+ * The post to embed on slot 01 (#20). Optional everywhere, and only offered on
+ * the three platforms with a public oEmbed endpoint.
+ *
+ * A listing carries a *profile* handle, and oEmbed takes a *post* URL — so
+ * without this field there is nothing for #20 to resolve. It is the smallest
+ * change that makes the embedded post panel possible at all.
+ *
+ * Unlike the target URL, this one cannot be derived: only the buyer knows which
+ * of their posts they want on the board. It is therefore validated hard —
+ * https, the platform's own host, and a path that looks like a post rather than
+ * a profile — before it is ever sent anywhere.
+ */
+const postUrl = z.string().trim().max(2048, "That link is too long.").optional();
+
 const handleListing = z
   .object({
     slot,
@@ -58,6 +74,7 @@ const handleListing = z
     tagline,
     platform: z.enum(["github", "youtube", "instagram", "tiktok", "reddit"]),
     handle: z.string(),
+    postUrl,
   })
   .superRefine((value, ctx) => {
     const result = handleSchema(value.platform).safeParse(value.handle);
@@ -66,6 +83,28 @@ const handleListing = z
         ctx.addIssue({ code: "custom", path: ["handle"], message: issue.message });
       }
     }
+
+    if (!value.postUrl) return;
+
+    if (!providerFor(value.platform)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["postUrl"],
+        message: "This platform has no post embed. Leave this blank.",
+      });
+      return;
+    }
+
+    try {
+      normalisePostUrl(value.platform, value.postUrl);
+    } catch (error) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["postUrl"],
+        message:
+          error instanceof InvalidPostUrlError ? error.message : "That is not a usable post link.",
+      });
+    }
   })
   .transform((value) => ({
     ...value,
@@ -73,6 +112,9 @@ const handleListing = z
     displayName: null,
     // Derived, never supplied.
     targetUrl: deriveTargetUrl(value.platform, value.handle.trim()),
+    // Normalised here so the cache key is settled before the row is written and
+    // two links to the same post cannot become two cache entries.
+    postUrl: value.postUrl ? normalisePostUrl(value.platform, value.postUrl) : null,
   }));
 
 const websiteListing = z
@@ -110,6 +152,9 @@ const websiteListing = z
     handle: "",
     displayName: value.displayName,
     targetUrl: new URL(value.url).toString(),
+    // A website listing is a link, not a post. The database refuses one here
+    // too (purchase_post_url_embeddable_platform).
+    postUrl: null,
   }));
 
 export const handleListingSchema = handleListing;

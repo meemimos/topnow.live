@@ -5,6 +5,7 @@ import { MarketPanel } from "@/components/market/market";
 import { PricingDialog } from "@/components/pricing/pricing-dialog";
 import { BevelButton } from "@/components/ui/bevel-button";
 import { readAvatars } from "@/lib/avatar/store";
+import { readEmbed } from "@/lib/embed/store";
 import { clientConfig } from "@/lib/config/client";
 import { readMarket } from "@/lib/market/read";
 import { DURATION_HOURS, askHrCents, baseHrCents } from "@/lib/pricing";
@@ -39,6 +40,12 @@ export default async function Home() {
   // an upstream rate-limit budget.
   const avatars = await readAvatars(slots.flatMap((slot) => (slot.live ? [slot.live] : [])));
 
+  // Slot 01's post embed (#20). A read, like the avatars. Null covers every
+  // reason there might be nothing to show — no post link, a platform with no
+  // provider, a deleted post, a resolution that failed — and slot 01 renders the
+  // profile card in all of them.
+  const embed = await readEmbed(slots[0]?.live ?? null);
+
   return (
     <ServerClockProvider serverNow={now}>
       <main className="mx-auto flex max-w-[1020px] flex-col px-2 pt-2.5 pb-10">
@@ -70,7 +77,7 @@ export default async function Home() {
           </div>
         </header>
 
-        <Board slots={slots} now={now} avatars={avatars} />
+        <Board slots={slots} now={now} avatars={avatars} embed={embed} />
         <LedgerTable ledger={ledger} />
         {/* Below both the board and the ledger, deliberately (#12): the chart
             corroborates the board, it does not sell the slot. */}

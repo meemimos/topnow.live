@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { BlockedRequestError, fetchImageBytes, type Transport } from "./net";
+import { BlockedRequestError, fetchBytes, type Transport } from "./net";
 
 /**
  * The guarded fetch (#19).
@@ -30,7 +30,7 @@ describe("what it refuses before sending anything", () => {
   it("refuses a host that is not on the allow-list", async () => {
     const transport = vi.fn<Transport>();
     await expect(
-      fetchImageBytes("https://evil.example.com/a.png", { isHostAllowed, transport }),
+      fetchBytes("https://evil.example.com/a.png", { isHostAllowed, transport }),
     ).rejects.toThrow(BlockedRequestError);
     // The point: nothing was sent. A refusal after the request is not a refusal.
     expect(transport).not.toHaveBeenCalled();
@@ -43,7 +43,7 @@ describe("what it refuses before sending anything", () => {
     "data:image/png;base64,AAAA",
   ])("refuses %s", async (url) => {
     const transport = vi.fn<Transport>();
-    await expect(fetchImageBytes(url, { isHostAllowed, transport })).rejects.toThrow(
+    await expect(fetchBytes(url, { isHostAllowed, transport })).rejects.toThrow(
       BlockedRequestError,
     );
     expect(transport).not.toHaveBeenCalled();
@@ -52,15 +52,13 @@ describe("what it refuses before sending anything", () => {
   it("refuses a URL carrying credentials", async () => {
     const transport = vi.fn<Transport>();
     await expect(
-      fetchImageBytes("https://user:pw@images.example.com/a.png", { isHostAllowed, transport }),
+      fetchBytes("https://user:pw@images.example.com/a.png", { isHostAllowed, transport }),
     ).rejects.toThrow(/credentials/);
     expect(transport).not.toHaveBeenCalled();
   });
 
   it("refuses something that is not a URL at all", async () => {
-    await expect(fetchImageBytes("not a url", { isHostAllowed })).rejects.toThrow(
-      BlockedRequestError,
-    );
+    await expect(fetchBytes("not a url", { isHostAllowed })).rejects.toThrow(BlockedRequestError);
   });
 });
 
@@ -73,7 +71,7 @@ describe("redirects", () => {
         ? { status: 302, location: "https://cdn.example.com/a.png", body: bodyOf() }
         : { status: 200, location: null, body: bodyOf(PAYLOAD) };
 
-    const result = await fetchImageBytes("https://images.example.com/a.png", {
+    const result = await fetchBytes("https://images.example.com/a.png", {
       isHostAllowed,
       transport,
     });
@@ -89,7 +87,7 @@ describe("redirects", () => {
     });
 
     await expect(
-      fetchImageBytes("https://images.example.com/a.png", { isHostAllowed, transport }),
+      fetchBytes("https://images.example.com/a.png", { isHostAllowed, transport }),
     ).rejects.toThrow(/not an allowed host/);
   });
 
@@ -103,7 +101,7 @@ describe("redirects", () => {
     });
 
     await expect(
-      fetchImageBytes("https://images.example.com/a.png", { isHostAllowed, transport }),
+      fetchBytes("https://images.example.com/a.png", { isHostAllowed, transport }),
     ).rejects.toThrow(/link-local/);
   });
 
@@ -116,7 +114,7 @@ describe("redirects", () => {
         : { status: 200, location: null, body: bodyOf(PAYLOAD) };
     };
 
-    await fetchImageBytes("https://images.example.com/a.png", { isHostAllowed, transport });
+    await fetchBytes("https://images.example.com/a.png", { isHostAllowed, transport });
     expect(seen).toEqual(["https://images.example.com/a.png", "https://images.example.com/b.png"]);
   });
 
@@ -128,7 +126,7 @@ describe("redirects", () => {
     });
 
     await expect(
-      fetchImageBytes("https://images.example.com/a.png", {
+      fetchBytes("https://images.example.com/a.png", {
         isHostAllowed,
         transport,
         maxRedirects: 2,
@@ -139,7 +137,7 @@ describe("redirects", () => {
   it("refuses a 3xx with no Location rather than treating it as a body", async () => {
     const transport: Transport = async () => ({ status: 302, location: null, body: bodyOf() });
     await expect(
-      fetchImageBytes("https://images.example.com/a.png", { isHostAllowed, transport }),
+      fetchBytes("https://images.example.com/a.png", { isHostAllowed, transport }),
     ).rejects.toThrow(/no location/);
   });
 });
@@ -162,7 +160,7 @@ describe("the byte cap", () => {
     });
 
     await expect(
-      fetchImageBytes("https://images.example.com/a.png", {
+      fetchBytes("https://images.example.com/a.png", {
         isHostAllowed,
         transport,
         maxBytes: 256,
@@ -176,7 +174,7 @@ describe("the byte cap", () => {
 
   it("accepts a body exactly at the cap", async () => {
     const bytes = new Uint8Array(256).fill(7);
-    const result = await fetchImageBytes("https://images.example.com/a.png", {
+    const result = await fetchBytes("https://images.example.com/a.png", {
       isHostAllowed,
       transport: respondWith(bytes),
       maxBytes: 256,
@@ -191,7 +189,7 @@ describe("the byte cap", () => {
       body: bodyOf(new Uint8Array([1, 2]), new Uint8Array([3]), new Uint8Array([4])),
     });
 
-    const result = await fetchImageBytes("https://images.example.com/a.png", {
+    const result = await fetchBytes("https://images.example.com/a.png", {
       isHostAllowed,
       transport,
     });
@@ -203,7 +201,7 @@ describe("failures", () => {
   it.each([404, 403, 500, 503])("refuses a %d", async (status) => {
     const transport: Transport = async () => ({ status, location: null, body: bodyOf() });
     await expect(
-      fetchImageBytes("https://images.example.com/a.png", { isHostAllowed, transport }),
+      fetchBytes("https://images.example.com/a.png", { isHostAllowed, transport }),
     ).rejects.toThrow(new RegExp(`returned ${status}`));
   });
 
@@ -215,7 +213,7 @@ describe("failures", () => {
       });
 
     await expect(
-      fetchImageBytes("https://images.example.com/a.png", {
+      fetchBytes("https://images.example.com/a.png", {
         isHostAllowed,
         transport,
         timeoutMs: 20,
@@ -233,7 +231,7 @@ describe("failures", () => {
     };
 
     await expect(
-      fetchImageBytes("https://images.example.com/a.png", {
+      fetchBytes("https://images.example.com/a.png", {
         isHostAllowed,
         transport,
         timeoutMs: 25,

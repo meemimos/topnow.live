@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { DURATION_HOURS } from "@/lib/pricing";
 
 import { HANDLE_RULES, deriveTargetUrl } from "./platforms";
-import { fieldErrors, parseCheckout } from "./schema";
+import { fieldErrors, handleListingSchema, parseCheckout, websiteListingSchema } from "./schema";
 
 const base = { slot: 1, durationH: 3, tagline: "Open-source invoicing." } as const;
 
@@ -197,5 +197,98 @@ describe("malformed input", () => {
 
   it("rejects an unknown platform", () => {
     expect(parseCheckout(handleListing({ platform: "myspace" })).success).toBe(false);
+  });
+});
+
+/**
+ * The post link (#20).
+ *
+ * A listing carries a profile handle and oEmbed needs a post URL, so this field
+ * is what makes the embedded panel possible at all. It is also the only URL in
+ * the product a buyer types rather than one the product derives — which is why
+ * it is validated this hard before it is ever sent anywhere.
+ */
+describe("the optional post link", () => {
+  const base = {
+    slot: 1,
+    durationH: 3,
+    tagline: "Open-source invoicing for freelancers who hate invoicing.",
+  } as const;
+
+  it("is optional — a listing without one is valid", () => {
+    const result = handleListingSchema.safeParse({
+      ...base,
+      platform: "youtube",
+      handle: "parcelkit",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.postUrl).toBeNull();
+  });
+
+  it("accepts a real post and stores it normalised", () => {
+    const result = handleListingSchema.safeParse({
+      ...base,
+      platform: "youtube",
+      handle: "parcelkit",
+      postUrl: "https://www.youtube.com/watch?v=abc123&utm_source=twitter",
+    });
+
+    expect(result.success).toBe(true);
+    // Normalised here rather than at resolution time, so the cache key is
+    // settled before the row is written.
+    if (result.success) {
+      expect(result.data.postUrl).toBe("https://www.youtube.com/watch?v=abc123");
+    }
+  });
+
+  it("rejects a profile link with a message a buyer can act on", () => {
+    const result = handleListingSchema.safeParse({
+      ...base,
+      platform: "youtube",
+      handle: "parcelkit",
+      postUrl: "https://www.youtube.com/@parcelkit",
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const issue = result.error.issues.find((i) => i.path[0] === "postUrl");
+      expect(issue?.message).toMatch(/specific post/);
+    }
+  });
+
+  it("rejects a link on somebody else's host", () => {
+    const result = handleListingSchema.safeParse({
+      ...base,
+      platform: "youtube",
+      handle: "parcelkit",
+      postUrl: "https://evil.example.com/watch?v=abc",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("tells a GitHub listing to leave it blank rather than silently dropping it", () => {
+    const result = handleListingSchema.safeParse({
+      ...base,
+      platform: "github",
+      handle: "mira-builds",
+      postUrl: "https://www.youtube.com/watch?v=abc123",
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const issue = result.error.issues.find((i) => i.path[0] === "postUrl");
+      expect(issue?.message).toMatch(/no post embed/);
+    }
+  });
+
+  it("gives a website listing no post link at all", () => {
+    const result = websiteListingSchema.safeParse({
+      ...base,
+      platform: "web",
+      displayName: "Parcelkit",
+      url: "https://parcelkit.example",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.postUrl).toBeNull();
   });
 });

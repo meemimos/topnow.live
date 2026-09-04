@@ -3,13 +3,13 @@ import { request as httpsRequest } from "node:https";
 import type { LookupFunction } from "node:net";
 
 import { classifyAddress, classifyAddresses, parseIpv4, parseIpv6 } from "./addresses";
-import { FETCH_TIMEOUT_MS, MAX_REDIRECTS, MAX_SOURCE_BYTES } from "./constants";
 
 /**
- * The guarded fetch (#19).
+ * The guarded fetch (#19, #20).
  *
  * This is the one place in the product that makes an outbound request to a URL a
- * stranger influenced, so it is written as a gate rather than as a convenience:
+ * stranger influenced — an avatar host, an oEmbed endpoint — so it is written as
+ * a gate rather than as a convenience:
  * https only, allow-listed host, every redirect re-checked, every resolved
  * address classified, a byte cap enforced while streaming, and a deadline on the
  * whole thing.
@@ -22,6 +22,14 @@ import { FETCH_TIMEOUT_MS, MAX_REDIRECTS, MAX_SOURCE_BYTES } from "./constants";
  * resolve to something else — DNS rebinding is precisely the trick of answering
  * differently the second time. Global `fetch` gives no seam to close that window.
  */
+
+/**
+ * Defaults, deliberately mean. Each caller may tighten them; none may reach out
+ * without a bound, because "no limit" on a hostile fetch is the whole problem.
+ */
+export const DEFAULT_TIMEOUT_MS = 4_000;
+export const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
+export const DEFAULT_MAX_REDIRECTS = 3;
 
 export class BlockedRequestError extends Error {
   constructor(reason: string) {
@@ -86,38 +94,51 @@ const guardedLookup: LookupFunction = (hostname, options, callback) => {
   });
 };
 
-/** The real transport: one request, no automatic redirect following. */
-export const httpsTransport: Transport = (url, signal) =>
-  new Promise<TransportResponse>((resolve, reject) => {
-    const request = httpsRequest(
-      url,
-      {
-        method: "GET",
-        signal,
-        // Never follow a redirect inside the client — each hop is re-checked
-        // against the allow-list by the caller instead.
-        lookup: guardedLookup,
-        headers: {
-          // Named honestly. A resolver that disguises itself is a resolver
-          // whose traffic cannot be blocked by a host that wants it blocked.
-          "user-agent": "TopNow-Avatar/1.0 (+https://topnow.live)",
-          accept: "image/png,image/jpeg,image/webp,image/gif;q=0.9,*/*;q=0.1",
-          "accept-encoding": "identity",
-        },
-      },
-      (response) => {
-        const location = response.headers.location;
-        resolve({
-          status: response.statusCode ?? 0,
-          location: typeof location === "string" ? location : null,
-          body: response,
-        });
-      },
-    );
+export const IMAGE_ACCEPT = "image/png,image/jpeg,image/webp,image/gif;q=0.9,*/*;q=0.1";
+export const JSON_ACCEPT = "application/json;q=1.0,text/javascript;q=0.9,*/*;q=0.1";
 
-    request.on("error", reject);
-    request.end();
-  });
+/**
+ * The real transport: one request, no automatic redirect following.
+ *
+ * Built per `accept` rather than taking it per call, because the transport is
+ * also the seam tests replace — keeping its signature to (url, signal) means a
+ * test double never has to know about headers.
+ */
+export function makeHttpsTransport(accept: string): Transport {
+  return (url, signal) =>
+    new Promise<TransportResponse>((resolve, reject) => {
+      const request = httpsRequest(
+        url,
+        {
+          method: "GET",
+          signal,
+          // Never follow a redirect inside the client — each hop is re-checked
+          // against the allow-list by the caller instead.
+          lookup: guardedLookup,
+          headers: {
+            // Named honestly. A client that disguises itself is a client whose
+            // traffic cannot be blocked by a host that wants it blocked.
+            "user-agent": "TopNow/1.0 (+https://topnow.live)",
+            accept,
+            // No compression: a gzip bomb turns a 2MB cap into gigabytes of
+            // decoded output, and the cap counts bytes on the wire.
+            "accept-encoding": "identity",
+          },
+        },
+        (response) => {
+          const location = response.headers.location;
+          resolve({
+            status: response.statusCode ?? 0,
+            location: typeof location === "string" ? location : null,
+            body: response,
+          });
+        },
+      );
+
+      request.on("error", reject);
+      request.end();
+    });
+}
 
 /**
  * Reads a body with a hard ceiling.
@@ -150,6 +171,8 @@ async function readCapped(body: AsyncIterable<Uint8Array>, cap: number): Promise
 export type FetchOptions = {
   /** The allow-list. A host not on it is refused before any packet is sent. */
   isHostAllowed: (host: string) => boolean;
+  /** What the caller will actually accept. Images for #19, JSON for #20. */
+  accept?: string;
   transport?: Transport;
   timeoutMs?: number;
   maxBytes?: number;
@@ -212,16 +235,14 @@ function checkUrl(raw: string, isHostAllowed: (host: string) => boolean): URL {
  * genuinely one host handing off to another — but a redirect *off* the list is
  * the exact move this function exists to stop.
  */
-export async function fetchImageBytes(
-  startUrl: string,
-  options: FetchOptions,
-): Promise<FetchedBytes> {
+export async function fetchBytes(startUrl: string, options: FetchOptions): Promise<FetchedBytes> {
   const {
     isHostAllowed,
-    transport = httpsTransport,
-    timeoutMs = FETCH_TIMEOUT_MS,
-    maxBytes = MAX_SOURCE_BYTES,
-    maxRedirects = MAX_REDIRECTS,
+    accept = IMAGE_ACCEPT,
+    transport = makeHttpsTransport(accept),
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    maxBytes = DEFAULT_MAX_BYTES,
+    maxRedirects = DEFAULT_MAX_REDIRECTS,
   } = options;
 
   const controller = new AbortController();

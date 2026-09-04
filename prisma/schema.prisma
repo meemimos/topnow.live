@@ -59,6 +59,20 @@ model Purchase {
   /// Derived from platform + handle, or supplied for websites. Always absolute.
   targetUrl String @db.VarChar(2048)
 
+  /// The post to embed on slot 01 (#20). Optional, and only meaningful for the
+  /// three platforms with a public oEmbed endpoint.
+  ///
+  /// Needed because a listing carries a *profile* handle and oEmbed takes a
+  /// *post* URL — without this column there is nothing for #20 to resolve.
+  /// Constrained in the migration to be https and absent for platforms that
+  /// have no embed.
+  postUrl String? @db.VarChar(2048)
+
+  /// Clicks on this listing's link, counted by TopNow (#20). Never a figure
+  /// borrowed from a platform: this is the one engagement number the product
+  /// can actually measure, which is why it is the one it is allowed to print.
+  clicks Int @default(0)
+
   tagline String @db.VarChar(60)
 
   /// 1 | 3 | 6 | 12 | 24. A snap point, constrained in the migration.
@@ -198,4 +212,63 @@ model Avatar {
   /// The refresh job scans by staleness.
   @@index([status, resolvedAt])
   @@map("avatar")
+}
+
+enum EmbedStatus {
+  /// The provider answered and the post is renderable.
+  ok
+  /// Settled: no embed for this platform, or the post is gone. Not retried.
+  unavailable
+  /// Transient — a timeout, a 5xx. Retried on the schedule in constants.ts.
+  failed
+}
+
+/// A resolved oEmbed for a post (#20).
+///
+/// Keyed by the post URL rather than by the purchase, because the same post can
+/// be rented more than once and each rental should not re-ask the provider.
+///
+/// Negative results are cached too. Without that, a deleted post becomes an
+/// outbound request on every refresh cycle forever — which is the rate-limit
+/// budget #18 is about.
+model Embed {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Normalised: scheme and host lowercased, tracking parameters stripped.
+  postUrl  String   @unique @db.VarChar(2048)
+  platform Platform
+
+  status EmbedStatus
+
+  /// From the provider's oEmbed response. Rendered as text, never as markup.
+  title      String? @db.VarChar(300)
+  authorName String? @db.VarChar(120)
+
+  /// The provider's iframe, kept only after `iframeSrcOf` has proved it is a
+  /// single iframe pointing at an allow-listed host. Rendered on demand, in a
+  /// sandbox, never on first paint.
+  iframeSrc    String? @db.VarChar(2048)
+  iframeWidth  Int?
+  iframeHeight Int?
+
+  /// TopNow's own copy of the provider's thumbnail, re-encoded like an avatar.
+  /// Stored rather than hotlinked so the board makes no third-party request.
+  thumbnail      Bytes?
+  thumbnailWidth Int?
+
+  /// Views, only when the provider actually reports them. Almost never: none of
+  /// YouTube, TikTok or Reddit put a view count in an oEmbed response. Nullable
+  /// because "we do not know" is the truth, and the footer omits the row.
+  providerViews Int?
+
+  failureReason String? @db.VarChar(500)
+  attempts      Int     @default(0)
+
+  resolvedAt DateTime @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([status, resolvedAt])
+  @@map("embed")
 }

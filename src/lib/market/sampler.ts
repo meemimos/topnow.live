@@ -10,6 +10,7 @@ import {
   type Slot,
 } from "@/lib/pricing";
 import { refreshStaleAvatars, type RefreshSummary } from "@/lib/avatar/store";
+import { refreshStaleEmbeds, type EmbedRefreshSummary } from "@/lib/embed/store";
 import { promoteAll } from "@/lib/purchase/state";
 
 import { latestSampledAsk } from "./ask";
@@ -38,9 +39,10 @@ import { latestSampledAsk } from "./ask";
  * 3. Nudges promotion, so a slot freeing at 3am does not wait for a visitor.
  *    An optimisation, not a correctness requirement — the same transaction #1
  *    would run on the next read, just triggered earlier.
- * 4. Refreshes stale avatars (#19). This is the *only* scheduled resolution
- *    point; a board render must never cause a third-party request, so the
- *    refresh has to live behind a clock rather than behind a visitor.
+ * 4. Refreshes stale avatars (#19) and post embeds (#20). This is the *only*
+ *    scheduled resolution point; a board render must never cause a third-party
+ *    request, so the refresh has to live behind a clock rather than behind a
+ *    visitor.
  */
 
 const MS_PER_HOUR = 3_600_000;
@@ -166,6 +168,7 @@ export type TickResult = {
   samplesSkipped: number;
   promoted: number;
   avatars: RefreshSummary;
+  embeds: EmbedRefreshSummary;
   ranAt: Date;
 };
 
@@ -183,6 +186,7 @@ export async function runHourlyTick(now: Date = new Date()): Promise<TickResult>
   // depends on; an avatar host having a bad hour must not cost the series an
   // hour it can never get back.
   const avatars = await refreshStaleAvatars(now);
+  const embeds = await refreshStaleEmbeds(now);
 
   return {
     hour,
@@ -190,6 +194,7 @@ export async function runHourlyTick(now: Date = new Date()): Promise<TickResult>
     samplesSkipped: skipped.length,
     promoted: promoted.length,
     avatars,
+    embeds,
     ranAt: now,
   };
 }

@@ -6,7 +6,7 @@ import { getDb } from "@/lib/db";
 
 import { REFRESH_AFTER_MS, RETRY_FAILED_AFTER_MS } from "./constants";
 import { resolveAvatar } from "./resolve";
-import type { Transport } from "./net";
+import type { Transport } from "@/lib/fetch/net";
 
 /**
  * The avatar cache (#19).
