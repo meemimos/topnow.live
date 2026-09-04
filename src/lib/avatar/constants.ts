@@ -55,3 +55,13 @@ export const REFRESH_AFTER_MS = 24 * 60 * 60 * 1000;
  * outbound request on every refresh cycle — the rate-limit budget #18 is about.
  */
 export const RETRY_FAILED_AFTER_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Wall-clock a single refresh pass may spend.
+ *
+ * A count limit alone does not bound the time — twenty rows each timing out at
+ * four seconds is eighty seconds inside one scheduled request, which is past
+ * the limit of most serverless runtimes. Whatever is not reached stays stale
+ * and is picked up next tick, oldest first.
+ */
+export const REFRESH_BUDGET_MS = 20_000;

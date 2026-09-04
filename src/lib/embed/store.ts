@@ -5,7 +5,12 @@ import type { Embed, EmbedStatus, Platform } from "@prisma/client";
 import { getDb } from "@/lib/db";
 import type { Transport } from "@/lib/fetch/net";
 
-import { REFRESH_AFTER_MS, REFRESH_BATCH, RETRY_FAILED_AFTER_MS } from "./constants";
+import {
+  REFRESH_AFTER_MS,
+  REFRESH_BATCH,
+  REFRESH_BUDGET_MS,
+  RETRY_FAILED_AFTER_MS,
+} from "./constants";
 import { normalisePostUrl } from "./providers";
 import { resolveEmbed } from "./resolve";
 
@@ -212,9 +217,10 @@ export type EmbedRefreshSummary = { considered: number; resolved: number; failed
  */
 export async function refreshStaleEmbeds(
   now: Date = new Date(),
-  options: { transport?: Transport; limit?: number } = {},
+  options: { transport?: Transport; limit?: number; budgetMs?: number } = {},
 ): Promise<EmbedRefreshSummary> {
   const limit = options.limit ?? REFRESH_BATCH;
+  const deadline = Date.now() + (options.budgetMs ?? REFRESH_BUDGET_MS);
   const db = getDb();
 
   const active = await db.purchase.findMany({
@@ -247,7 +253,9 @@ export async function refreshStaleEmbeds(
 
   // Sequential, like the avatar refresh: parallel requests to one provider is
   // how a refresh pass becomes the thing that gets the product rate-limited.
+  // Bounded by wall clock too — see the same loop in the avatar store.
   for (const row of stale) {
+    if (Date.now() >= deadline) break;
     const updated = await ensureEmbed(row.platform, row.postUrl, {
       now,
       transport: options.transport,

@@ -60,7 +60,11 @@ function Item({ event }: { event: TickerEvent }) {
 function Strip({ events, hidden }: { events: TickerEvent[]; hidden?: boolean }) {
   return (
     <ul
-      className="m-0 flex shrink-0 list-none items-baseline gap-x-5 p-0"
+      // The trailing gap lives *inside* each copy (`pe-5`) rather than between
+      // the two. `translateX(-50%)` is half the animated container, so a gap
+      // sitting between the copies makes half the container one copy plus half
+      // a gap — and the strip jumped ten pixels on every loop.
+      className="m-0 flex shrink-0 list-none items-baseline gap-x-5 p-0 pe-5"
       aria-hidden={hidden ? "true" : undefined}
     >
       {events.map((event, index) => (
@@ -79,8 +83,8 @@ export function Ticker({ events }: { events: TickerEvent[] }) {
             {NOTHING_YET}
           </p>
         ) : (
-          <div className="flex gap-x-5 overflow-x-auto motion-safe:overflow-x-hidden" data-ticker>
-            <div className="flex shrink-0 gap-x-5 motion-safe:animate-[tn-ticker_38s_linear_infinite]">
+          <div className="flex overflow-x-auto motion-safe:overflow-x-hidden" data-ticker>
+            <div className="flex shrink-0 motion-safe:animate-[tn-ticker_38s_linear_infinite]">
               <Strip events={events} />
               {/* The seamless half. Displayed only when it will actually move —
                   a motionless duplicate would just be the same events twice. */}

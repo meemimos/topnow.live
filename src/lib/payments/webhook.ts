@@ -105,7 +105,7 @@ export function parseSessionMetadata(raw: Record<string, string> | null): Sessio
 }
 
 export type WebhookOutcome =
-  | { kind: "created"; purchaseId: string }
+  | { kind: "created"; purchaseId: string; media: PendingMedia }
   | { kind: "duplicate" }
   | { kind: "refunded"; reason: string }
   | { kind: "ignored"; type: string };
@@ -143,6 +143,34 @@ export async function handleStripeEvent(
 
     default:
       return { kind: "ignored", type: event.type };
+  }
+}
+
+/** What a created purchase still needs fetched from a third party. */
+export type PendingMedia = {
+  platform: SessionMetadata["platform"];
+  handle: string;
+  postUrl: string | null;
+  now: Date;
+};
+
+/**
+ * Fetch the listing's avatar and post embed (#19, #20).
+ *
+ * Exported and called by the route rather than from inside the handler, because
+ * the scheduling primitive (`after`) belongs to the request lifecycle and this
+ * module has no business knowing about one. It also keeps this directly
+ * callable from a test.
+ *
+ * Neither call can throw — both report failure as a return value — and neither
+ * is load-bearing: a listing whose avatar did not resolve renders the designed
+ * placeholder, and one whose embed did not resolve renders the profile card.
+ * Whatever does not land here is picked up by the hourly refresh.
+ */
+export async function resolveListingMedia(media: PendingMedia): Promise<void> {
+  await ensureAvatar(media.platform, media.handle, { now: media.now });
+  if (media.postUrl) {
+    await ensureEmbed(media.platform, media.postUrl, { now: media.now });
   }
 }
 
@@ -193,24 +221,38 @@ async function handleCompletedSession(
     // immediately rather than waiting for a read or the hourly job.
     await promoteSlot(metadata.slot, now);
 
-    // Resolve the avatar here, because this is the submit (#19): it is the one
-    // moment the product learns about a new account, and resolving anywhere
-    // downstream would mean resolving on a read.
+    // Resolve the avatar and the embed here, because this is the submit (#19,
+    // #20): it is the one moment the product learns about a new account, and
+    // resolving anywhere downstream would mean resolving on a read.
     //
-    // Awaited rather than left dangling — a promise nobody holds can be killed
-    // by the runtime the instant this handler returns — but it cannot throw and
-    // cannot fail the webhook. A listing whose avatar did not resolve is a
-    // listing with the placeholder, which is a designed state.
-    await ensureAvatar(metadata.platform, metadata.handle, { now });
-
-    // Same reasoning as the avatar: this is the submit, and resolving anywhere
-    // downstream would mean resolving on a read. Also cannot throw — a listing
-    // whose embed did not resolve is a listing that renders as a profile card.
-    if (metadata.postUrl) {
-      await ensureEmbed(metadata.platform, metadata.postUrl, { now });
-    }
-
-    return { kind: "created", purchaseId: purchase.id };
+    // Deferred rather than awaited inline. Both calls talk to third parties —
+    // up to four seconds for an avatar and seven for an embed and its
+    // thumbnail — and Stripe's handler has to answer quickly. Awaited, a slow
+    // provider could hold the response past the function's limit, killing the
+    // handler *after* the purchase committed but *before* the 200: Stripe would
+    // record a failed delivery and retry a purchase that already exists.
+    //
+    // A bare dangling promise would be the other failure — the runtime can kill
+    // it the instant the handler returns. `after` is the primitive for exactly
+    // this: the work runs once the response is sent, still inside the
+    // invocation's lifetime.
+    return {
+      kind: "created",
+      purchaseId: purchase.id,
+      // Handed back rather than fetched here. Both calls talk to third parties
+      // — up to four seconds for an avatar and seven for an embed and its
+      // thumbnail — and Stripe's handler has to answer quickly. Awaited inline,
+      // a slow provider could hold the response past the function's limit,
+      // killing the handler *after* the purchase committed but *before* the
+      // 200: Stripe would record a failed delivery and retry a purchase that
+      // already exists. The route runs this after the response has gone.
+      media: {
+        platform: metadata.platform,
+        handle: metadata.handle,
+        postUrl: metadata.postUrl,
+        now,
+      },
+    };
   } catch (error) {
     if (isUniqueViolation(error)) {
       // Stripe retried, or two deliveries landed together. One row exists,

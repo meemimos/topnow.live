@@ -155,6 +155,20 @@ describe("ensureAvatar", () => {
     expect(transport).not.toHaveBeenCalled();
   });
 
+  it("writes nothing for a listing with no handle", async () => {
+    const transport = await countingTransport();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    // A website listing carries an empty handle by design (#21), and the avatar
+    // table requires a non-empty one — so this used to attempt a write the
+    // schema refuses, on every single website purchase, and swallow the error.
+    expect(await ensureAvatar("web", "", { now: NOW, transport })).toBeNull();
+
+    expect(await db.avatar.count()).toBe(0);
+    expect(transport).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("re-resolves anyway when forced", async () => {
     const transport = await countingTransport();
     await ensureAvatar("github", "mira-builds", { now: NOW, transport });
@@ -310,6 +324,27 @@ describe("refreshStaleAvatars", () => {
       resolved: 0,
       failed: 0,
     });
+  });
+
+  it("stops at its time budget, not only at its row count", async () => {
+    const slow: Transport = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      return { status: 503, location: null, body: (async function* none() {})() };
+    };
+
+    for (const handle of ["one", "two", "three", "four", "five", "six"]) {
+      await seedLive(handle);
+      await ensureAvatar("github", handle, { now: NOW, transport: await countingTransport() });
+    }
+
+    const later = new Date(NOW.getTime() + REFRESH_AFTER_MS + 1);
+    const summary = await refreshStaleAvatars(later, { transport: slow, budgetMs: 60 });
+
+    // A row count alone does not bound the time: twenty rows each timing out is
+    // eighty seconds inside one scheduled request. Whatever is not reached is
+    // still stale, and the next tick starts with it.
+    expect(summary.considered).toBe(6);
+    expect(summary.resolved + summary.failed).toBeLessThan(6);
   });
 
   it("bounds how many it touches in one pass", async () => {

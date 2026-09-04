@@ -43,6 +43,15 @@ export type TransportResponse = {
   /** `Location`, only meaningful on a 3xx. */
   location: string | null;
   body: AsyncIterable<Uint8Array>;
+  /**
+   * Abandon this response without reading it.
+   *
+   * Needed on a redirect. Node keeps the connection alive for reuse, and a
+   * response whose body is never consumed holds its socket until the agent
+   * times out — so following a redirect without this leaks one socket per hop,
+   * on every GitHub avatar resolution, which always redirects.
+   */
+  cancel?: () => void;
 };
 
 /** The seam tests replace. The real one is `httpsTransport` below. */
@@ -131,6 +140,7 @@ export function makeHttpsTransport(accept: string): Transport {
             status: response.statusCode ?? 0,
             location: typeof location === "string" ? location : null,
             body: response,
+            cancel: () => response.destroy(),
           });
         },
       );
@@ -257,6 +267,10 @@ export async function fetchBytes(startUrl: string, options: FetchOptions): Promi
       const response = await transport(url, controller.signal);
 
       if (response.status >= 300 && response.status < 400) {
+        // Dropped before anything else can fail: the body is not going to be
+        // read, and an unread response holds its socket open.
+        response.cancel?.();
+
         if (!response.location) {
           throw new BlockedRequestError(`${response.status} with no location`);
         }
@@ -269,6 +283,9 @@ export async function fetchBytes(startUrl: string, options: FetchOptions): Promi
       }
 
       if (response.status !== 200) {
+        // Same reasoning as a redirect: an error body nobody reads still holds
+        // a socket.
+        response.cancel?.();
         throw new BlockedRequestError(`upstream returned ${response.status}`);
       }
 

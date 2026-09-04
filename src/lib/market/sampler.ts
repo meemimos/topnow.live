@@ -47,6 +47,18 @@ import { latestSampledAsk } from "./ask";
 
 const MS_PER_HOUR = 3_600_000;
 
+const EMPTY_REFRESH = { considered: 0, resolved: 0, failed: 0 } as const;
+
+/** Runs a non-essential part of the tick without letting it fail the tick. */
+async function settled<T>(work: Promise<T>, fallback: T, label: string): Promise<T> {
+  try {
+    return await work;
+  } catch (error) {
+    console.warn(`[cron/hourly] ${label} refresh failed`, error);
+    return fallback;
+  }
+}
+
 /** Truncates to the top of the hour, which is the grain samples are stored at. */
 export function truncateToHour(at: Date): Date {
   return new Date(Math.floor(at.getTime() / MS_PER_HOUR) * MS_PER_HOUR);
@@ -182,11 +194,13 @@ export async function runHourlyTick(now: Date = new Date()): Promise<TickResult>
   const promoted = await promoteAll(now);
   const { hour, written, skipped } = await sampleAsks(now);
 
-  // Last, and unable to throw. The sample is the part of this job that the chart
-  // depends on; an avatar host having a bad hour must not cost the series an
-  // hour it can never get back.
-  const avatars = await refreshStaleAvatars(now);
-  const embeds = await refreshStaleEmbeds(now);
+  // Last, and made unable to throw. The sample above is the part of this job
+  // the chart depends on and an hour of it can never be recovered, so nothing
+  // after it may fail the tick. `ensureAvatar` and `ensureEmbed` swallow their
+  // own errors, but the queries that *choose* what to refresh do not — a
+  // dropped connection there would have taken the whole run down with it.
+  const avatars = await settled(refreshStaleAvatars(now), EMPTY_REFRESH, "avatars");
+  const embeds = await settled(refreshStaleEmbeds(now), EMPTY_REFRESH, "embeds");
 
   return {
     hour,

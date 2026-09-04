@@ -35,3 +35,6 @@ export const RETRY_FAILED_AFTER_MS = 3 * 60 * 60 * 1000;
 
 /** How many stale embeds one hourly pass will touch. */
 export const REFRESH_BATCH = 10;
+
+/** Wall-clock a single refresh pass may spend. See the avatar constant. */
+export const REFRESH_BUDGET_MS = 20_000;

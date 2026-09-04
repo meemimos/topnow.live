@@ -21,8 +21,15 @@ export type Provider = {
   frameHosts: readonly string[];
   /** Hosts a thumbnail may be fetched from. */
   thumbnailHosts: readonly string[];
-  /** What a post link looks like, so a profile URL is not sent as a post. */
-  postPath: RegExp;
+  /**
+   * Whether a URL is a *post* on this platform rather than a profile.
+   *
+   * A predicate over the whole URL rather than one regex over the path, because
+   * a platform's post shape can depend on which of its hosts the link is on:
+   * `youtu.be/<id>` is a video, but the same bare path on `youtube.com` is a
+   * channel. One pattern covering both let a channel URL through as a post.
+   */
+  isPostUrl: (url: URL) => boolean;
 };
 
 export const PROVIDERS: Partial<Record<Platform, Provider>> = {
@@ -34,7 +41,15 @@ export const PROVIDERS: Partial<Record<Platform, Provider>> = {
     // provider's own embed HTML uses when asked to; either is accepted.
     frameHosts: ["www.youtube-nocookie.com", "www.youtube.com", "youtube.com"],
     thumbnailHosts: ["i.ytimg.com", "img.youtube.com"],
-    postPath: /^\/(watch|shorts\/|live\/|embed\/)|^\/[\w-]{6,}$/,
+    isPostUrl: (url) =>
+      // A bare path is a video id only on the short domain. On youtube.com the
+      // same shape is a legacy channel URL (`/mrbeast6000`), and accepting it
+      // meant checkout took a profile link, resolution 404'd, and the row was
+      // then cached `unavailable` forever.
+      url.hostname === "youtu.be"
+        ? /^\/[\w-]{6,}$/.test(url.pathname)
+        : /^\/(watch$|shorts\/|live\/|embed\/)/.test(url.pathname) &&
+          (url.pathname !== "/watch" || url.searchParams.has("v")),
   },
   tiktok: {
     endpoint: "https://www.tiktok.com/oembed",
@@ -42,7 +57,7 @@ export const PROVIDERS: Partial<Record<Platform, Provider>> = {
     endpointHosts: ["www.tiktok.com", "tiktok.com"],
     frameHosts: ["www.tiktok.com"],
     thumbnailHosts: ["p16-sign.tiktokcdn-us.com", "p16-sign-va.tiktokcdn.com"],
-    postPath: /^\/@[\w.-]+\/video\/\d+/,
+    isPostUrl: (url) => /^\/@[\w.-]+\/video\/\d+/.test(url.pathname),
   },
   reddit: {
     endpoint: "https://www.reddit.com/oembed",
@@ -50,7 +65,7 @@ export const PROVIDERS: Partial<Record<Platform, Provider>> = {
     endpointHosts: ["www.reddit.com", "reddit.com"],
     frameHosts: ["www.redditmedia.com", "embed.reddit.com"],
     thumbnailHosts: ["preview.redd.it", "external-preview.redd.it", "i.redd.it"],
-    postPath: /^\/r\/[\w-]+\/comments\/\w+/,
+    isPostUrl: (url) => /^\/r\/[\w-]+\/comments\/\w+/.test(url.pathname),
   },
 };
 
@@ -131,8 +146,8 @@ export function normalisePostUrl(platform: Platform, raw: string): string {
   }
 
   // A profile URL is not a post. Without this the resolver would spend a request
-  // learning what the pattern already knows.
-  if (!provider.postPath.test(url.pathname)) {
+  // learning what the pattern already knows — and then cache the 404 as settled.
+  if (!provider.isPostUrl(url)) {
     throw new InvalidPostUrlError("Link to a specific post, not to a profile.");
   }
 

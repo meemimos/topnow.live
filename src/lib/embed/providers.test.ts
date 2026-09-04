@@ -30,6 +30,12 @@ describe("what a post URL must be", () => {
 
   it.each([
     ["a profile rather than a post", "youtube", "https://www.youtube.com/@parcelkit"],
+    // A legacy channel URL has the same shape as a youtu.be video id. One
+    // pattern covering both hosts accepted it as a post: checkout took a
+    // profile link, resolution 404'd, and the row cached `unavailable` forever.
+    ["a legacy channel URL", "youtube", "https://www.youtube.com/mrbeast6000"],
+    ["a channel with a trailing segment", "youtube", "https://www.youtube.com/c/somechannel"],
+    ["a bare /watch with no video", "youtube", "https://www.youtube.com/watch"],
     ["a tiktok profile", "tiktok", "https://www.tiktok.com/@halfbuilt"],
     ["a subreddit rather than a post", "reddit", "https://www.reddit.com/r/webdev/"],
   ] as const)("refuses %s", (_label, platform, url) => {
@@ -133,6 +139,13 @@ describe("the provider table", () => {
       const covered = Boolean(providerFor(platform)) !== Boolean(NO_EMBED_REASON[platform]);
       expect(covered, `${platform} needs one or the other, not both or neither`).toBe(true);
     }
+  });
+
+  it("reads a bare path as a video only on the short domain", () => {
+    // The same path is a video on youtu.be and a channel on youtube.com, which
+    // is exactly why this is a predicate over the URL rather than over the path.
+    expect(isValidPostUrl("youtube", "https://youtu.be/dQw4w9WgXcQ")).toBe(true);
+    expect(isValidPostUrl("youtube", "https://www.youtube.com/dQw4w9WgXcQ")).toBe(false);
   });
 
   it("keeps frame hosts separate from post hosts", () => {

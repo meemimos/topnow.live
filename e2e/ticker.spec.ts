@@ -218,6 +218,26 @@ test.describe("presentation", () => {
     await expect(items(page).first()).toBeVisible();
   });
 
+  test("loops seamlessly — one copy's width, gap included", async ({ page }) => {
+    await page.goto("/");
+
+    const measured = await ticker(page)
+      .locator("[data-ticker] > div")
+      .evaluate((el) => {
+        const copies = Array.from(el.children) as HTMLElement[];
+        return {
+          container: el.getBoundingClientRect().width,
+          first: copies[0]!.getBoundingClientRect().width,
+        };
+      });
+
+    // The animation slides translateX(-50%), so half the container must be
+    // exactly one copy. A gap sitting *between* the copies made half the
+    // container one copy plus half a gap, and the strip jumped ten pixels on
+    // every loop; the trailing gap now lives inside each copy instead.
+    expect(measured.container / 2).toBeCloseTo(measured.first, 0);
+  });
+
   test("is legible at 360px without pushing the page sideways", async ({ page }) => {
     await page.setViewportSize({ width: 360, height: 800 });
     await page.goto("/");

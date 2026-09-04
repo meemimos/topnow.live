@@ -134,6 +134,41 @@ describe("redirects", () => {
     ).rejects.toThrow(/more than 2 redirects/);
   });
 
+  it("abandons a redirect's body instead of leaving its socket open", async () => {
+    // Node keeps the connection alive for reuse, and a response whose body is
+    // never consumed holds its socket until the agent times out. GitHub's
+    // avatar URL always redirects, so without this it was one leaked socket per
+    // resolution.
+    const cancelled: number[] = [];
+    const transport: Transport = async (url) => ({
+      status: url.pathname === "/a.png" ? 302 : 200,
+      location: url.pathname === "/a.png" ? "https://cdn.example.com/b.png" : null,
+      body: bodyOf(PAYLOAD),
+      cancel: () => cancelled.push(1),
+    });
+
+    await fetchBytes("https://images.example.com/a.png", { isHostAllowed, transport });
+    // Exactly the redirect, and not the response that was actually read.
+    expect(cancelled).toHaveLength(1);
+  });
+
+  it("abandons an error body too", async () => {
+    let cancelled = 0;
+    const transport: Transport = async () => ({
+      status: 500,
+      location: null,
+      body: bodyOf(PAYLOAD),
+      cancel: () => {
+        cancelled += 1;
+      },
+    });
+
+    await expect(
+      fetchBytes("https://images.example.com/a.png", { isHostAllowed, transport }),
+    ).rejects.toThrow(/returned 500/);
+    expect(cancelled).toBe(1);
+  });
+
   it("refuses a 3xx with no Location rather than treating it as a body", async () => {
     const transport: Transport = async () => ({ status: 302, location: null, body: bodyOf() });
     await expect(

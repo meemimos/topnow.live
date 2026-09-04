@@ -4,7 +4,7 @@ import type { Avatar, AvatarStatus, Platform } from "@prisma/client";
 
 import { getDb } from "@/lib/db";
 
-import { REFRESH_AFTER_MS, RETRY_FAILED_AFTER_MS } from "./constants";
+import { REFRESH_AFTER_MS, REFRESH_BUDGET_MS, RETRY_FAILED_AFTER_MS } from "./constants";
 import { resolveAvatar } from "./resolve";
 import type { Transport } from "@/lib/fetch/net";
 
@@ -132,6 +132,13 @@ export async function ensureAvatar(
   const handle = avatarKey(rawHandle);
   const db = getDb();
 
+  // A website listing carries an empty handle by design (#21), and the avatar
+  // table requires a non-empty one. Without this the upsert violated
+  // `avatar_handle_present` on every single website purchase — caught and
+  // swallowed by the handler below, so it was a silent guaranteed-failing write
+  // rather than a loud one. There is also nothing to key a row on.
+  if (!handle) return null;
+
   try {
     const existing = await db.avatar.findUnique({
       where: { platform_handle: { platform, handle } },
@@ -236,9 +243,10 @@ export type RefreshSummary = { considered: number; resolved: number; failed: num
  */
 export async function refreshStaleAvatars(
   now: Date = new Date(),
-  options: { transport?: Transport; limit?: number } = {},
+  options: { transport?: Transport; limit?: number; budgetMs?: number } = {},
 ): Promise<RefreshSummary> {
   const limit = options.limit ?? REFRESH_BATCH;
+  const deadline = Date.now() + (options.budgetMs ?? REFRESH_BUDGET_MS);
   const db = getDb();
 
   const active = await db.purchase.findMany({
@@ -268,7 +276,13 @@ export async function refreshStaleAvatars(
 
   // Sequential on purpose. Three parallel requests to one host is how a refresh
   // pass turns into the thing that gets the resolver rate-limited (#18).
+  //
+  // Bounded by wall clock as well as by count, because the count alone does not
+  // bound the time: twenty rows each timing out at four seconds is eighty
+  // seconds inside one scheduled request. Whatever is left over is simply still
+  // stale, and the next tick starts with it — the query is ordered oldest-first.
   for (const row of stale) {
+    if (Date.now() >= deadline) break;
     const updated = await ensureAvatar(row.platform, row.handle, {
       now,
       transport: options.transport,
