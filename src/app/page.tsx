@@ -1,4 +1,7 @@
+import { headers } from "next/headers";
+
 import { Board } from "@/components/board/board";
+import { Counters } from "@/components/counters/counters";
 import { ServerClockProvider } from "@/components/clock/provider";
 import { LedgerTable } from "@/components/ledger/ledger";
 import { MarketPanel } from "@/components/market/market";
@@ -12,6 +15,7 @@ import { DURATION_HOURS, askHrCents, baseHrCents } from "@/lib/pricing";
 import { currentAsks } from "@/lib/purchase/queue";
 import { currentBoard, readLedger } from "@/lib/purchase/state";
 import { serverNow } from "@/lib/time/server";
+import { readCounts, recordVisit } from "@/lib/visits/store";
 
 // The board changes every second and reflects live state, so it is never
 // prerendered. Reading it also promotes anything whose window has closed (#1).
@@ -46,6 +50,12 @@ export default async function Home() {
   // profile card in all of them.
   const embed = await readEmbed(slots[0]?.live ?? null);
 
+  // Note the visit, then read the counters (#15). Recording is idempotent within
+  // the window, so a reload is not a second visit; reading comes from a cache,
+  // so a page render never triggers a counting query however busy the board is.
+  await recordVisit(await headers(), new Date(now));
+  const counts = await readCounts(new Date(now));
+
   return (
     <ServerClockProvider serverNow={now}>
       <main className="mx-auto flex max-w-[1020px] flex-col px-2 pt-2.5 pb-10">
@@ -78,6 +88,7 @@ export default async function Home() {
         </header>
 
         <Board slots={slots} now={now} avatars={avatars} embed={embed} />
+        <Counters counts={counts} />
         <LedgerTable ledger={ledger} />
         {/* Below both the board and the ledger, deliberately (#12): the chart
             corroborates the board, it does not sell the slot. */}

@@ -272,3 +272,36 @@ model Embed {
   @@index([status, resolvedAt])
   @@map("embed")
 }
+
+/// One visitor, in one window (#15).
+///
+/// The hit counter is only a joke worth telling if the number is real, so this
+/// is what the number is counted from. A row is a **visit**: one visitor seen in
+/// one thirty-minute window. Reloading the page ten times in a row is one visit;
+/// coming back after lunch is a second.
+///
+/// `visitorHash` is a one-way hash of the request's address and user agent with
+/// a salt that rotates daily. It is not reversible to a person and cannot be
+/// used to follow anyone across days, which is the point: the counter needs to
+/// know "same visitor or different", and nothing beyond that.
+model Visit {
+  id Int @id @default(autoincrement())
+
+  /// sha256, hex. Never an address, never a user agent.
+  visitorHash String @db.VarChar(64)
+
+  /// Start of the window this visit falls in. Unique with the hash, which is
+  /// what makes a reload idempotent rather than a second visit.
+  bucket DateTime @db.Timestamptz(3)
+
+  firstSeenAt DateTime @default(now()) @db.Timestamptz(3)
+
+  /// Bumped on every render inside the window. This is what "online now" reads:
+  /// a visitor seen in the last few minutes, not one who arrived at some point
+  /// in the last half hour.
+  lastSeenAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([visitorHash, bucket])
+  @@index([lastSeenAt])
+  @@map("visit")
+}
