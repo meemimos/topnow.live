@@ -148,6 +148,36 @@ Consequences to carry through:
 - #12 moves behind #13 in priority; #13 is the launch-day market state.
 - Reveal criterion is twenty hours of _sampled ask_ on a slot (#22), not twenty sales.
 
+### D4. Refunds on a killed rental — RESOLVED: none
+
+Gates #17, and was the last open launch blocker.
+
+A takedown forfeits the remaining hours. Decided by @meemimos on 2026-09-04 and
+recorded on the issue.
+
+Consequences to carry through:
+
+- No Stripe refund call on a kill, so no partial-refund path and no reconciliation
+  between the ledger and Stripe's refund objects.
+- **The forfeit must be stated up front** — in the terms and at checkout — not discovered
+  at takedown time. A rule nobody was told about is a worse outcome than the refund itself.
+- The ledger already files a killed rental under ENDED with its window closed, so the tape
+  stays truthful with no extra work.
+- Because there is no money back, the takedown is the entire remedy, which raises the bar
+  on it being deliberate. #17 records a reason on the row so a kill can be explained later.
+
+### D5. #20 needed a post URL that nothing collected — RESOLVED: added to checkout
+
+A listing carries a **profile** handle; oEmbed takes a **post** URL. Nothing in #8 or #21
+collected one, so #20 as specified had nothing to resolve.
+
+Resolved by adding an optional post link to checkout for the three platforms with a public
+oEmbed endpoint (YouTube, TikTok, Reddit), carried through the Stripe session metadata to a
+new `purchase.postUrl` column. It is the smallest change that makes the embedded post panel
+possible at all, and it is the only URL in the product a buyer types rather than one the
+product derives — so it is validated against the platform's own hosts and a post-shaped
+path before it is ever sent anywhere.
+
 ## Settled — tape ordering
 
 `docs/build-prompt.md` specifies `tape = status = ended, ordered by bought_at descending`,
@@ -176,3 +206,14 @@ Registered against the build prompt's "Things I want you to push back on":
    specified anyway. Revisit once there is real traffic to judge.
 3. **Decay has nothing to decay** if surge is a pure function of the current queue. The ask
    needs memory for decay to mean anything. See issue #2.
+4. **Only GitHub can resolve an avatar without credentials.** YouTube needs a Data API key,
+   Instagram and TikTok need authenticated tokens, and Reddit refuses unauthenticated profile
+   reads from datacentre addresses. Those platforms render the designed placeholder with the
+   reason recorded (#19). Inventing a likeness — a silhouette, a colour derived from the
+   handle — would be fabrication. The pipeline is unchanged the day a key exists.
+5. **No provider reports a view count in an oEmbed response.** Not YouTube, not TikTok, not
+   Reddit. So slot 01's footer usually shows clicks alone, and the views row is simply absent
+   (#20). Clicks are TopNow's own measurement, which is why they are the count it prints.
+6. **"Looking at slot 01 right now" is not measurable** without instrumenting scroll position
+   per visitor. The line says "on the board right now" instead (#15) — the prototype's panel
+   shape with a claim the server can stand behind.
