@@ -8,6 +8,7 @@ import { MarketPanel } from "@/components/market/market";
 import { PricingDialog } from "@/components/pricing/pricing-dialog";
 import { Ticker } from "@/components/ticker/ticker";
 import { BevelButton } from "@/components/ui/bevel-button";
+import { HowItWorks, SiteFooter, SiteHeader } from "@/components/ui/site-chrome";
 import { readAvatars } from "@/lib/avatar/store";
 import { readEmbed } from "@/lib/embed/store";
 import { clientConfig } from "@/lib/config/client";
@@ -66,6 +67,11 @@ export default async function Home() {
   return (
     <ServerClockProvider serverNow={now}>
       <main className="mx-auto flex max-w-[1020px] flex-col px-2 pt-2.5 pb-10">
+        {/* The open-slot count is read from the board that is about to render,
+            so the chrome cannot claim a slot is free while the panel below shows
+            it occupied. */}
+        <SiteHeader open={slots.filter((slot) => slot.live === null).length} />
+
         <header>
           <h1 className="text-[clamp(24px,6.2vw,44px)] leading-[1.08] font-bold tracking-[-0.01em] text-balance text-paper [text-shadow:2px_2px_0_var(--color-ground-shade)]">
             Rent the top spot.
@@ -101,6 +107,8 @@ export default async function Home() {
         {/* Below both the board and the ledger, deliberately (#12): the chart
             corroborates the board, it does not sell the slot. */}
         {market && <MarketPanel market={market} now={now} />}
+        <HowItWorks />
+        <SiteFooter serverNow={now} />
       </main>
     </ServerClockProvider>
   );

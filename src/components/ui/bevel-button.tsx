@@ -69,6 +69,9 @@ export function BevelButton({
       aria-pressed={selected === undefined ? undefined : selected}
       className={cn(
         "inline-flex cursor-pointer items-center justify-center gap-2 text-center",
+        // `asChild` renders a link, and a link is underlined by the base rules.
+        // A button is not.
+        "no-underline",
         "border border-ink font-pixel font-bold tracking-[0.04em]",
         "disabled:cursor-not-allowed disabled:text-ink-faint",
         BUTTON_VARIANTS[effectiveVariant],

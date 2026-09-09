@@ -2,6 +2,9 @@ import "server-only";
 
 import { z } from "zod";
 
+import { parsePasswordHash } from "@/lib/admin/password";
+import { parsePolicy, type Policy } from "@/lib/limit/policy";
+
 /**
  * Server-side configuration, validated once at boot.
  *
@@ -51,7 +54,112 @@ const serverSchema = z.object({
    */
   STRIPE_SECRET_KEY: z.string({ error: "STRIPE_SECRET_KEY is required" }).min(1),
   STRIPE_WEBHOOK_SECRET: z.string({ error: "STRIPE_WEBHOOK_SECRET is required" }).min(1),
+
+  /**
+   * Rate limits (#18), one per protected surface.
+   *
+   * Written as `count/window+burst` — see src/lib/limit/policy.ts, which is also
+   * where the argument for the burst being part of the syntax lives. Parsed here
+   * so a malformed limit stops the server at boot rather than at the first
+   * request that happens to be limited.
+   *
+   * The defaults are deliberately generous. A limit that catches a real person
+   * is worse than one that lets an abuser through, because the queued-hours cap
+   * (#24) already bounds what flooding the queue can achieve — the limiter is
+   * protecting API quota and third-party budgets, not standing in for the cap.
+   */
+  RATE_LIMIT_CHECKOUT: policy("20/1h+5"),
+  RATE_LIMIT_REPORT: policy("10/1h+3"),
+  RATE_LIMIT_AVATAR: policy("120/1h+20"),
+  RATE_LIMIT_EMBED: policy("120/1h+20"),
+  /** Stricter, and on authentication attempts specifically. */
+  RATE_LIMIT_ADMIN: policy("10/15m+5"),
+
+  /**
+   * How many proxies sit in front of the app.
+   *
+   * Decides which `x-forwarded-for` entry a limit is keyed on — see
+   * src/lib/limit/address.ts. Wrong in one direction it trusts text the client
+   * wrote; wrong in the other it buckets everybody together. It is configuration
+   * because only the deployment knows the answer.
+   *
+   * `0` says there is no proxy and therefore no knowable client address. That is
+   * a real deployment — `npm start` on a box with nothing in front of it — and
+   * it used to be unrepresentable, so such a deployment silently fell into the
+   * shared bucket and refused the sixth checkout site-wide.
+   */
+  RATE_LIMIT_TRUSTED_PROXIES: z.coerce.number().int().min(0).max(8).default(1),
+
+  /**
+   * The admin surface (#17).
+   *
+   * All three default to values that leave the surface **switched off**, and
+   * that is the important property: an admin panel whose default is "reachable"
+   * is one that ships reachable the first time somebody forgets a variable.
+   * `adminConfigured()` below is the single gate, and every admin route asks it
+   * before doing anything else.
+   *
+   * The password is stored as a scrypt hash, never as a password — see
+   * src/lib/admin/password.ts, and scripts/admin-password.mjs for producing one.
+   */
+  ADMIN_USERNAME: z.string().default("admin"),
+  ADMIN_PASSWORD_HASH: passwordHash(),
+  /** Signs the session cookie. Rotating it signs every operator out. */
+  ADMIN_SESSION_SECRET: z.string().default(""),
 });
+
+/**
+ * The admin password hash, validated at boot.
+ *
+ * Empty means "no admin surface" and is the default. Anything else has to be a
+ * hash this app can actually verify against — because the failure otherwise is
+ * silent and permanent: `adminConfigured()` sees a non-empty string and opens
+ * the sign-in page, `verifyPassword` throws on every attempt, `signIn` catches
+ * it and returns the same "not a valid sign-in" a wrong password gets, and the
+ * operator is locked out of their own panel with nothing in the logs to say
+ * why. The rate-limit policies below are parsed at boot for exactly this
+ * reason; the hash was the one variable that was not.
+ */
+function passwordHash() {
+  return z
+    .string()
+    .default("")
+    .superRefine((value, ctx) => {
+      if (value.length === 0) return;
+      try {
+        parsePasswordHash(value);
+      } catch (error) {
+        ctx.addIssue({
+          code: "custom",
+          message: error instanceof Error ? error.message : "invalid password hash",
+        });
+      }
+    });
+}
+
+/**
+ * A rate-limit policy, parsed from its compact string form.
+ *
+ * `z.string().default(...).transform(...)` rather than a plain string, so the
+ * value the rest of the app sees is already a validated policy and there is no
+ * second place where a limit could be parsed differently.
+ */
+function policy(fallback: string) {
+  return z
+    .string()
+    .default(fallback)
+    .transform((text, ctx): Policy => {
+      try {
+        return parsePolicy(text);
+      } catch (error) {
+        ctx.addIssue({
+          code: "custom",
+          message: error instanceof Error ? error.message : "invalid rate limit",
+        });
+        return z.NEVER;
+      }
+    });
+}
 
 /** Values that exist to let the app boot, and must never reach Stripe. */
 const PLACEHOLDER_MARKER = "placeholder";
@@ -67,6 +175,21 @@ const PLACEHOLDER_MARKER = "placeholder";
 export function stripeConfigured(): boolean {
   const { STRIPE_SECRET_KEY } = serverConfig();
   return !STRIPE_SECRET_KEY.includes(PLACEHOLDER_MARKER);
+}
+
+/**
+ * Whether the admin surface exists at all.
+ *
+ * False until a password hash and a session secret are both supplied. While it
+ * is false the admin routes answer as though they were not routes — see
+ * src/lib/admin/auth.ts — because "not configured" must not be a different,
+ * more forgiving state than "not signed in".
+ */
+export function adminConfigured(): boolean {
+  const { ADMIN_PASSWORD_HASH, ADMIN_SESSION_SECRET, ADMIN_USERNAME } = serverConfig();
+  return (
+    ADMIN_PASSWORD_HASH.length > 0 && ADMIN_SESSION_SECRET.length >= 32 && ADMIN_USERNAME.length > 0
+  );
 }
 
 export type ServerConfig = z.infer<typeof serverSchema>;

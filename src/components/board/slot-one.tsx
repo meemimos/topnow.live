@@ -4,6 +4,7 @@ import { EmbeddedPost } from "@/components/board/embedded-post";
 import { Meter } from "@/components/board/meter";
 import { Avatar } from "@/components/board/avatar";
 import { PLATFORMS, displayNameFor, linkTextFor } from "@/components/board/platform";
+import { ReportListing } from "@/components/report/report-listing";
 import { BevelButton } from "@/components/ui/bevel-button";
 import { Plate } from "@/components/ui/plate";
 import { TitleBar } from "@/components/ui/title-bar";
@@ -54,11 +55,12 @@ export function SlotOne({
         SLOT 01
       </TitleBar>
 
-      <div className="flex flex-wrap gap-3 px-2.5 py-3">
-        {/* Fills its column so the card and the meter align. The embedded post
-            panel (#20) will occupy the extra height when it lands. */}
+      {/* `items-start`, so the profile card ends where its content ends. With
+          the columns stretched, a listing with no embedded post — which is most
+          of them — left a tall empty panel beside a full meter column. */}
+      <div className="flex flex-wrap items-start gap-3 px-2.5 py-3">
         <div className="flex min-w-[250px] flex-[1_1_300px] flex-col">
-          <Plate variant="inset" surface="paper" className="h-full p-3">
+          <Plate variant="inset" surface="paper" className="p-3">
             <div className="flex items-start gap-3">
               <Avatar avatar={avatar} size="large" />
 
@@ -114,6 +116,10 @@ export function SlotOne({
           <BevelButton size="lg" disabled={cta.disabled}>
             {cta.label}
           </BevelButton>
+
+          {/* Quiet, and last. Findable when something is wrong; not an
+              invitation to doubt a listing somebody paid for (#17). */}
+          <ReportListing purchaseId={live.id} name={displayNameFor(live)} />
         </div>
       </div>
     </Plate>

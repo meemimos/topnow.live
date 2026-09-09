@@ -2,7 +2,9 @@ import "server-only";
 
 import type { Embed, EmbedStatus, Platform } from "@prisma/client";
 
+import { serverConfig } from "@/lib/config/server";
 import { getDb } from "@/lib/db";
+import { consume } from "@/lib/limit/limiter";
 import type { Transport } from "@/lib/fetch/net";
 
 import {
@@ -119,6 +121,23 @@ export async function ensureEmbed(
     const existing = await db.embed.findUnique({ where: { postUrl } });
     if (existing && !options.force && !isStale(existing, now)) return existing;
 
+    // Same rule as the avatar cache (#18): a cache hit costs nothing, only an
+    // actual oEmbed request does. Keyed by platform, because the budget being
+    // protected is the provider's.
+    const gate = await consume({
+      bucket: "embed",
+      identity: platform,
+      policy: serverConfig().RATE_LIMIT_EMBED,
+      now,
+    });
+    if (!gate.allowed) {
+      console.warn(
+        `[embed] ${postUrl} deferred: resolution limit reached, ` +
+          `retry in ${Math.ceil(gate.retryAfterMs / 1000)}s`,
+      );
+      return existing ?? null;
+    }
+
     const outcome = await resolveEmbed(platform, postUrl, { transport: options.transport });
     const row = rowFor(outcome, { now, previousAttempts: existing?.attempts ?? 0 });
 
@@ -208,7 +227,15 @@ export async function readEmbed(
   };
 }
 
-export type EmbedRefreshSummary = { considered: number; resolved: number; failed: number };
+export type EmbedRefreshSummary = {
+  considered: number;
+  resolved: number;
+  failed: number;
+  /** Held back by the resolution limit (#18). Not a failure — see RefreshSummary. */
+  deferred: number;
+};
+
+const EMPTY_SUMMARY: EmbedRefreshSummary = { considered: 0, resolved: 0, failed: 0, deferred: 0 };
 
 /**
  * Re-resolve embeds that have gone stale, for listings that are still live or
@@ -228,7 +255,7 @@ export async function refreshStaleEmbeds(
     select: { platform: true, postUrl: true },
     distinct: ["platform", "postUrl"],
   });
-  if (active.length === 0) return { considered: 0, resolved: 0, failed: 0 };
+  if (active.length === 0) return EMPTY_SUMMARY;
 
   const keys = new Map<string, Platform>();
   for (const listing of active) {
@@ -238,18 +265,36 @@ export async function refreshStaleEmbeds(
       // A row written before the validation tightened. Nothing to refresh.
     }
   }
-  if (keys.size === 0) return { considered: 0, resolved: 0, failed: 0 };
+  if (keys.size === 0) return EMPTY_SUMMARY;
 
-  const rows = await db.embed.findMany({
-    where: { postUrl: { in: [...keys.keys()] }, status: { in: ["ok", "failed"] } },
+  // Every row that exists, whatever its status. `unavailable` is settled and is
+  // not rescanned, but it still counts as tried — this is the set to subtract
+  // from, not the set to refresh.
+  const existing = await db.embed.findMany({
+    where: { postUrl: { in: [...keys.keys()] } },
     select: { postUrl: true, platform: true, status: true, resolvedAt: true },
     orderBy: { resolvedAt: "asc" },
-    take: limit,
   });
 
-  const stale = rows.filter((row) => isStale(row, now));
+  const known = new Set(existing.map((row) => row.postUrl));
+
+  // Same hole as the avatar cache had: the first attempt happens in the Stripe
+  // webhook, and a post the resolution limit (#18) deferred there has no row —
+  // so a refresher scanning only existing rows would never come back to it, and
+  // slot 01 would render as a profile card for the whole rental with nothing
+  // recording why.
+  const untried = [...keys.entries()]
+    .filter(([postUrl]) => !known.has(postUrl))
+    .map(([postUrl, platform]) => ({ postUrl, platform }));
+
+  const stale = [
+    ...untried,
+    ...existing.filter((row) => row.status !== "unavailable" && isStale(row, now)),
+  ].slice(0, limit);
+
   let resolved = 0;
   let failed = 0;
+  let deferred = 0;
 
   // Sequential, like the avatar refresh: parallel requests to one provider is
   // how a refresh pass becomes the thing that gets the product rate-limited.
@@ -260,9 +305,15 @@ export async function refreshStaleEmbeds(
       now,
       transport: options.transport,
     });
-    if (updated?.status === "ok") resolved += 1;
+
+    // A deferral hands back the untouched row, whose `resolvedAt` predates this
+    // pass. Without that comparison a throttled tick reported every row it
+    // skipped as resolved.
+    if (updated === null) failed += 1;
+    else if (updated.resolvedAt.getTime() !== now.getTime()) deferred += 1;
+    else if (updated.status === "ok") resolved += 1;
     else failed += 1;
   }
 
-  return { considered: stale.length, resolved, failed };
+  return { considered: stale.length, resolved, failed, deferred };
 }

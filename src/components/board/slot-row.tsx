@@ -3,6 +3,7 @@ import type { Purchase } from "@prisma/client";
 import { Avatar } from "@/components/board/avatar";
 import { CompactMeter } from "@/components/board/meter";
 import { PLATFORMS, displayNameFor, linkTextFor } from "@/components/board/platform";
+import { ReportListing } from "@/components/report/report-listing";
 import { BevelButton } from "@/components/ui/bevel-button";
 import { Plate, VacantPlate } from "@/components/ui/plate";
 import type { BoardAvatar } from "@/lib/avatar/store";
@@ -55,9 +56,13 @@ export function SlotRow({
 
       <CompactMeter endsAt={live.endsAt} />
 
-      <BevelButton size="sm" disabled={cta.disabled} className="shrink-0">
-        {cta.label}
-      </BevelButton>
+      <div className="flex shrink-0 flex-col items-center gap-1">
+        <BevelButton size="sm" disabled={cta.disabled}>
+          {cta.label}
+        </BevelButton>
+        {/* Every listing on the board carries one, not just slot 01 (#17). */}
+        <ReportListing purchaseId={live.id} name={displayNameFor(live)} />
+      </div>
     </Plate>
   );
 }

@@ -1,7 +1,12 @@
 "use server";
 
+import { headers } from "next/headers";
+
 import { fieldErrors, parseCheckout } from "@/lib/checkout/schema";
 import { serverConfig, stripeConfigured } from "@/lib/config/server";
+import { limiterAddress, warnUnidentified } from "@/lib/limit/address";
+import { checkoutLimited } from "@/lib/limit/copy";
+import { consume } from "@/lib/limit/limiter";
 import { liveGateway } from "@/lib/payments/stripe";
 import { getDb } from "@/lib/db";
 import {
@@ -113,6 +118,56 @@ export async function priceCheckout(input: unknown): Promise<CheckoutResult> {
 }
 
 /**
+ * Paces checkout creation (#18).
+ *
+ * Charged here rather than in `priceCheckout` for two reasons. Pricing creates
+ * nothing, calls nothing outside the process and reveals nothing that is not
+ * already printed on the board's meter — so limiting it would spend a budget to
+ * protect a number that is public. And it is the call the form makes on every
+ * submit, including the ones that come back with a validation error, so a limit
+ * there would land on somebody fixing a typo rather than on somebody abusing the
+ * endpoint.
+ *
+ * What this protects is the expensive half: a Stripe session per request, and a
+ * queue that anyone can push into without an account.
+ *
+ * Returns null when the request is allowed.
+ */
+async function checkoutRefusal(): Promise<StartPaymentResult | null> {
+  const { RATE_LIMIT_CHECKOUT, RATE_LIMIT_TRUSTED_PROXIES } = serverConfig();
+  const address = limiterAddress(await headers(), RATE_LIMIT_TRUSTED_PROXIES);
+
+  // No address the deployment vouches for, so there is nobody to pace. An
+  // earlier version bucketed every such caller together, which reads as prudent
+  // and is not: on a deployment with no proxy — `npm start` on a box, a
+  // perfectly real thing — *every* visitor lands in that one bucket and the
+  // sixth checkout site-wide is refused. A limiter that turns a misconfigured
+  // header into a shop with the shutters down is worse than no limiter here,
+  // because the queued-hours cap (#24) already bounds what flooding the queue
+  // can achieve. So this path warns and lets the buyer through.
+  //
+  // The report endpoint and admin sign-in make the opposite call, and say why.
+  if (!address) {
+    warnUnidentified("checkout", RATE_LIMIT_TRUSTED_PROXIES);
+    return null;
+  }
+
+  const gate = await consume({
+    bucket: "checkout",
+    identity: address,
+    policy: RATE_LIMIT_CHECKOUT,
+  });
+  if (gate.allowed) return null;
+
+  // A server action carries no HTTP status of its own — the response is the
+  // action's return value, not a status line — so the 429 half of #18 lives on
+  // the routes that are real endpoints (`/api/report`, admin sign-in). What the
+  // issue actually requires here is the other half: the product's own error
+  // treatment, in the product's voice, which is what `form` renders.
+  return { ok: false, errors: { form: checkoutLimited(gate.retryAfterMs) } };
+}
+
+/**
  * Starts a Stripe Checkout session (#26).
  *
  * The price is computed here and locked into the session metadata. Between now
@@ -122,6 +177,9 @@ export async function priceCheckout(input: unknown): Promise<CheckoutResult> {
  * No purchase row is created. That happens only when payment clears.
  */
 export async function startPayment(input: unknown): Promise<StartPaymentResult> {
+  const refused = await checkoutRefusal();
+  if (refused) return refused;
+
   const priced = await priceCheckout(input);
   if (!priced.ok) return priced;
 

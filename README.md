@@ -74,9 +74,63 @@ is empty.
 | `npm run db:migrate`              | Create and apply a migration       |
 | `npm run db:deploy`               | Apply migrations (deploy)          |
 | `npm run db:studio`               | Prisma Studio                      |
+| `npm run fidelity`                | Fidelity captures (#5)             |
 
 CI runs format, lint, typecheck, unit tests, build and e2e on every push and pull request,
 plus a secret scan. All of it must be green to merge.
+
+## The admin surface
+
+`/admin` exists only when `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH` and
+`ADMIN_SESSION_SECRET` are all set. Without them `/admin`, `/admin/login` and every
+admin API route answer `404` — a deployment that has not set the credentials does not
+have an admin panel, and that is the safe default rather than an inconvenience.
+
+The password is stored as a scrypt hash. Generate one with:
+
+```bash
+node scripts/admin-password.mjs
+```
+
+The hash is `:`-separated base64url rather than the conventional `$`-separated form,
+because Next.js expands `$NAME` when it loads a `.env` file — the usual encoding comes
+back mangled and the only symptom is that the right password stops working.
+
+`.env.example` carries a working fixture for local development and CI, **commented out**.
+The setup step is `cp .env.example .env.local`, so leaving them uncommented would mean a
+fresh deployment ran with a published session secret — and a public signing key is worse
+than a public password, because it mints valid cookies without going near the sign-in
+form. Uncomment them for local work; generate your own for anything else.
+
+**Refunds on a takedown: none.** See [`docs/REFUNDS.md`](docs/REFUNDS.md), and the
+decision it implements (D4) in [`docs/PLAN.md`](docs/PLAN.md).
+
+## Rate limits
+
+Four surfaces are limited: checkout creation, avatar resolution, oEmbed resolution and
+admin sign-in, plus the public report endpoint. Limits are written as
+`count/window+burst` (`RATE_LIMIT_*`) and parsed at boot, so a malformed one stops the
+server rather than the first request that happens to be limited.
+
+The burst is required syntax. "Twenty an hour" with no burst means one every three
+minutes, and the first person it blocks is somebody who fixed a typo and resubmitted.
+
+State lives in Postgres, not process memory — a limiter held in memory does nothing
+behind more than one server. The algorithm is GCRA, so `Retry-After` is the exact moment
+the next request gets through rather than a window boundary.
+
+## Visual fidelity (#5)
+
+`npm run fidelity` renders `TopNow.html` and the built app side by side at 360, 768 and
+1280 and writes the pairs to `reference/fidelity/`. It needs the app running:
+
+```bash
+npm run build && npm start &
+npm run fidelity
+```
+
+Differences are recorded in [`reference/fidelity/DEVIATIONS.md`](reference/fidelity/DEVIATIONS.md).
+An unexplained difference is a bug; an explained one is a decision.
 
 ## Scenarios
 

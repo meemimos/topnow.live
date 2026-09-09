@@ -1,7 +1,9 @@
 import sharp from "sharp";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { serverConfig } from "@/lib/config/server";
 import { getDb } from "@/lib/db";
+import { consume } from "@/lib/limit/limiter";
 import { quoteForQueue } from "@/lib/pricing";
 
 import { REFRESH_AFTER_MS, RETRY_FAILED_AFTER_MS } from "./constants";
@@ -57,12 +59,18 @@ const failing: Transport = async () => ({
 beforeEach(async () => {
   await db.avatar.deleteMany();
   await db.purchase.deleteMany();
+  // Resolution now spends rate-limit budget (#18), and these suites resolve far
+  // more often in a few seconds than any real deployment would. Cleared per test
+  // so a limit reached in one does not silently refuse resolution in the next —
+  // which would look like a caching bug rather than a limit.
+  await db.rateLimit.deleteMany();
   vi.restoreAllMocks();
 });
 
 afterAll(async () => {
   await db.avatar.deleteMany();
   await db.purchase.deleteMany();
+  await db.rateLimit.deleteMany();
 });
 
 describe("avatarKey", () => {
@@ -290,7 +298,7 @@ describe("refreshStaleAvatars", () => {
     const later = new Date(NOW.getTime() + REFRESH_AFTER_MS + 1);
     const summary = await refreshStaleAvatars(later, { transport });
 
-    expect(summary).toEqual({ considered: 1, resolved: 1, failed: 0 });
+    expect(summary).toEqual({ considered: 1, resolved: 1, failed: 0, deferred: 0 });
     expect(transport).toHaveBeenCalledTimes(1);
   });
 
@@ -323,6 +331,7 @@ describe("refreshStaleAvatars", () => {
       considered: 0,
       resolved: 0,
       failed: 0,
+      deferred: 0,
     });
   });
 
@@ -361,5 +370,166 @@ describe("refreshStaleAvatars", () => {
     // A job that times out half way refreshes the same first rows forever.
     expect(summary.considered).toBe(2);
     expect(transport).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("the resolution limit (#18)", () => {
+  /** Spends the whole avatar budget, so the next resolution is refused. */
+  async function exhaust(now: Date) {
+    const policy = serverConfig().RATE_LIMIT_AVATAR;
+    for (let i = 0; i < policy.burst; i += 1) {
+      await consume({ bucket: "avatar", identity: "github", policy, now });
+    }
+  }
+
+  it("does not spend budget on a cache hit", async () => {
+    const transport = await countingTransport();
+    await ensureAvatar("github", "mira-builds", { now: NOW, transport });
+
+    const afterFirst = await db.rateLimit.findFirst();
+    expect(afterFirst).not.toBeNull();
+
+    for (let i = 0; i < 30; i += 1) {
+      await ensureAvatar("github", "mira-builds", { now: NOW, transport });
+    }
+
+    // The issue is explicit that only actual upstream fetches consume limit.
+    // Otherwise a popular board burns the provider's budget on requests it never
+    // made — and the busier TopNow got, the sooner avatars would stop resolving.
+    expect(transport).toHaveBeenCalledTimes(1);
+    const afterHits = await db.rateLimit.findFirst();
+    expect(afterHits!.tat.getTime()).toBe(afterFirst!.tat.getTime());
+  });
+
+  it("declines to fetch once the budget is spent", async () => {
+    await exhaust(NOW);
+    const transport = await countingTransport();
+
+    expect(await ensureAvatar("github", "mira-builds", { now: NOW, transport })).toBeNull();
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it("does not record the refusal as a fact about the account", async () => {
+    await exhaust(NOW);
+    const transport = await countingTransport();
+    await ensureAvatar("github", "mira-builds", { now: NOW, transport });
+
+    // A `failed` row here would burn an attempt and cache a reason that says
+    // nothing about the handle — and `isStale` would then hold the account back
+    // from being resolved for the retry interval, over a limit that was ours.
+    expect(await db.avatar.count()).toBe(0);
+  });
+
+  it("keeps serving the cached row while resolution is held back", async () => {
+    const transport = await countingTransport();
+    await ensureAvatar("github", "mira-builds", { now: NOW, transport });
+
+    const stale = new Date(NOW.getTime() + REFRESH_AFTER_MS + 1);
+    await exhaust(stale);
+    transport.mockClear();
+
+    const row = await ensureAvatar("github", "mira-builds", { now: stale, transport });
+    // A limit on refreshing must not take a working avatar off the board.
+    expect(row?.status).toBe("ok");
+    expect(row?.large?.byteLength).toBeGreaterThan(0);
+    expect(transport).not.toHaveBeenCalled();
+  });
+});
+
+describe("an account that was never resolved even once", () => {
+  async function seedLive(handle: string) {
+    const quote = quoteForQueue(1, 3, 0);
+    await db.purchase.create({
+      data: {
+        slot: 1,
+        durationH: 3,
+        handle,
+        platform: "github",
+        targetUrl: `https://github.com/${handle}`,
+        tagline: "Open-source invoicing for freelancers who hate invoicing.",
+        priceHrCents: quote.askHrCents,
+        totalPaidCents: quote.totalCents,
+        status: "queued",
+      },
+    });
+  }
+
+  it("is picked up by the refresh, even though it has no row", async () => {
+    // The hole this closes: the only first attempt happens in the Stripe
+    // webhook. If the resolution limit (#18) defers it — or the webhook dies
+    // part way — nothing writes a row. A refresher that scans `avatar` would
+    // then never look at that account again, and the listing would go its whole
+    // rental with no avatar and nothing recording why.
+    const transport = await countingTransport();
+    await seedLive("never-tried");
+
+    const summary = await refreshStaleAvatars(NOW, { transport });
+
+    expect(summary.considered).toBe(1);
+    expect(summary.resolved).toBe(1);
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect((await db.avatar.findMany())[0]?.status).toBe("ok");
+  });
+
+  it("is tried before rows that merely went stale", async () => {
+    // It has been waiting longest and, unlike a stale row, has nothing cached
+    // to fall back on in the meantime.
+    const transport = await countingTransport();
+    await seedLive("has-a-row");
+    await ensureAvatar("github", "has-a-row", { now: NOW, transport });
+    await seedLive("never-tried");
+    transport.mockClear();
+
+    const stale = new Date(NOW.getTime() + REFRESH_AFTER_MS + 1);
+    await refreshStaleAvatars(stale, { transport, limit: 1 });
+
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(transport.mock.calls[0]![0].toString()).toContain("never-tried");
+  });
+
+  it("does not re-try an account already settled as unavailable", async () => {
+    // `unavailable` is an answer, not an absence. Counting it as never-tried
+    // would turn every settled account into a fetch on every single tick.
+    const transport = await countingTransport();
+    await seedLive("nobody");
+    await ensureAvatar("web", "", { now: NOW, transport });
+    await db.avatar.create({
+      data: {
+        platform: "github",
+        handle: "nobody",
+        status: "unavailable",
+        failureReason: "no such account",
+        resolvedAt: NOW,
+      },
+    });
+    transport.mockClear();
+
+    const summary = await refreshStaleAvatars(new Date(NOW.getTime() + REFRESH_AFTER_MS + 1), {
+      transport,
+    });
+
+    expect(summary.considered).toBe(0);
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it("reports a throttled pass as deferred rather than resolved", async () => {
+    const policy = serverConfig().RATE_LIMIT_AVATAR;
+    const transport = await countingTransport();
+    await seedLive("mira-builds");
+    await ensureAvatar("github", "mira-builds", { now: NOW, transport });
+
+    const stale = new Date(NOW.getTime() + REFRESH_AFTER_MS + 1);
+    for (let i = 0; i < policy.burst; i += 1) {
+      await consume({ bucket: "avatar", identity: "github", policy, now: stale });
+    }
+    transport.mockClear();
+
+    const summary = await refreshStaleAvatars(stale, { transport });
+
+    // A deferral is TopNow pacing itself, not a failure about the account.
+    // Counting it as `resolved` made a throttled tick look like a healthy one,
+    // which is the reading that would stop anybody investigating.
+    expect(summary).toMatchObject({ considered: 1, resolved: 0, failed: 0, deferred: 1 });
+    expect(transport).not.toHaveBeenCalled();
   });
 });
