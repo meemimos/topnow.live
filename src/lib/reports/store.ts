@@ -73,8 +73,15 @@ export async function submitReport(
   });
   if (!listing) return { kind: "unknown-listing" };
 
+  // Any report from this reporter about this listing today, not just an open
+  // one. Keying on `status: "open"` meant a dismissal did not stick: the same
+  // person could re-file the moment it was closed and put the listing straight
+  // back in the queue, which is the pile-on this check exists to prevent. The
+  // hash rotates daily, so tomorrow is a fresh report either way — and a
+  // reporter with genuinely new information is not silenced, they are told the
+  // report is already on file.
   const already = await db.report.findFirst({
-    where: { purchaseId: input.purchaseId, reporterHash: hash, status: "open" },
+    where: { purchaseId: input.purchaseId, reporterHash: hash },
     select: { id: true },
   });
   if (already) return { kind: "duplicate" };
@@ -137,8 +144,17 @@ export async function dismissReport(
     });
     if (count === 0) return null;
 
-    await tx.adminAction.create({ data: { kind: "dismiss", actor, reportId, reason } });
-    return tx.report.findUnique({ where: { id: reportId } });
+    const closed = await tx.report.findUniqueOrThrow({ where: { id: reportId } });
+
+    // `purchaseId` as well as `reportId`. The audit trail is read as prose —
+    // "<who> left up <what>" — and a dismissal that names only a report id has
+    // nothing to resolve the listing from, so every one of them rendered as
+    // "left up a listing". A record that cannot say which listing answers the
+    // question nobody asks.
+    await tx.adminAction.create({
+      data: { kind: "dismiss", actor, reportId, purchaseId: closed.purchaseId, reason },
+    });
+    return closed;
   });
 }
 

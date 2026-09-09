@@ -48,7 +48,7 @@ import { latestSampledAsk } from "./ask";
 
 const MS_PER_HOUR = 3_600_000;
 
-const EMPTY_REFRESH = { considered: 0, resolved: 0, failed: 0 } as const;
+const EMPTY_REFRESH = { considered: 0, resolved: 0, failed: 0, deferred: 0 } as const;
 
 /** Runs a non-essential part of the tick without letting it fail the tick. */
 async function settled<T>(work: Promise<T>, fallback: T, label: string): Promise<T> {

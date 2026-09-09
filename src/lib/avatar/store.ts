@@ -254,10 +254,26 @@ export function avatarLookupKey(listing: { platform: Platform; handle: string })
  */
 export const REFRESH_BATCH = 20;
 
-export type RefreshSummary = { considered: number; resolved: number; failed: number };
+export type RefreshSummary = {
+  considered: number;
+  resolved: number;
+  failed: number;
+  /**
+   * Held back by the resolution limit (#18) rather than attempted.
+   *
+   * Counted separately because a deferral is not a failure and must not read as
+   * one: it is TopNow pacing itself, the row is untouched, and the next tick
+   * will pick it up. Folding it into `failed` would make a healthy throttled
+   * pass look like a broken one.
+   */
+  deferred: number;
+};
+
+const EMPTY_SUMMARY: RefreshSummary = { considered: 0, resolved: 0, failed: 0, deferred: 0 };
 
 /**
- * Re-resolve the avatars that have gone stale.
+ * Re-resolve the avatars that have gone stale, and resolve the ones that never
+ * got a first attempt at all.
  *
  * Called from the hourly job, never from a read — that is the whole rule of #19,
  * and putting the only other caller of `ensureAvatar` here keeps it visible.
@@ -279,25 +295,41 @@ export async function refreshStaleAvatars(
     select: { platform: true, handle: true },
     distinct: ["platform", "handle"],
   });
-  if (active.length === 0) return { considered: 0, resolved: 0, failed: 0 };
+  if (active.length === 0) return EMPTY_SUMMARY;
 
-  const rows = await db.avatar.findMany({
-    where: {
-      OR: active.map((listing) => ({
-        platform: listing.platform,
-        handle: avatarKey(listing.handle),
-      })),
-      // `unavailable` is a settled answer and is deliberately not rescanned.
-      status: { in: ["ok", "failed"] },
-    },
+  const wanted = active
+    .filter((listing) => avatarKey(listing.handle).length > 0)
+    .map((listing) => ({ platform: listing.platform, handle: avatarKey(listing.handle) }));
+  if (wanted.length === 0) return EMPTY_SUMMARY;
+
+  // Every row that exists, whatever its status — including `unavailable`, which
+  // is a settled answer and must not be rescanned. This is the set to subtract
+  // from, not the set to refresh.
+  const existing = await db.avatar.findMany({
+    where: { OR: wanted },
     select: { platform: true, handle: true, status: true, resolvedAt: true },
     orderBy: { resolvedAt: "asc" },
-    take: limit,
   });
 
-  const stale = rows.filter((row) => isStale(row, now));
+  const known = new Set(existing.map((row) => `${row.platform}:${row.handle}`));
+
+  // A listing with no row at all has never been resolved even once. That is not
+  // hypothetical: the first attempt happens in the Stripe webhook, and if the
+  // resolution limit (#18) defers it — or the webhook simply failed part way —
+  // nothing writes a row, and a refresher that only scans existing rows would
+  // never look at that account again for the whole rental. The avatar would
+  // silently never appear. So the never-tried are refreshed first: they have
+  // been waiting longest and they have nothing cached to fall back on.
+  const untried = wanted.filter((entry) => !known.has(`${entry.platform}:${entry.handle}`));
+
+  const stale = [
+    ...untried,
+    ...existing.filter((row) => row.status !== "unavailable" && isStale(row, now)),
+  ].slice(0, limit);
+
   let resolved = 0;
   let failed = 0;
+  let deferred = 0;
 
   // Sequential on purpose. Three parallel requests to one host is how a refresh
   // pass turns into the thing that gets the resolver rate-limited (#18).
@@ -312,9 +344,16 @@ export async function refreshStaleAvatars(
       now,
       transport: options.transport,
     });
-    if (updated?.status === "ok") resolved += 1;
+
+    // A deferral returns the row untouched, so its `resolvedAt` is still the old
+    // one. Comparing against `now` is what tells a genuine re-resolution from a
+    // throttled one — without it, a limited pass reported every stale row it
+    // skipped as freshly resolved.
+    if (updated === null) failed += 1;
+    else if (updated.resolvedAt.getTime() !== now.getTime()) deferred += 1;
+    else if (updated.status === "ok") resolved += 1;
     else failed += 1;
   }
 
-  return { considered: stale.length, resolved, failed };
+  return { considered: stale.length, resolved, failed, deferred };
 }

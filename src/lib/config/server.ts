@@ -2,6 +2,7 @@ import "server-only";
 
 import { z } from "zod";
 
+import { parsePasswordHash } from "@/lib/admin/password";
 import { parsePolicy, type Policy } from "@/lib/limit/policy";
 
 /**
@@ -81,8 +82,13 @@ const serverSchema = z.object({
    * src/lib/limit/address.ts. Wrong in one direction it trusts text the client
    * wrote; wrong in the other it buckets everybody together. It is configuration
    * because only the deployment knows the answer.
+   *
+   * `0` says there is no proxy and therefore no knowable client address. That is
+   * a real deployment — `npm start` on a box with nothing in front of it — and
+   * it used to be unrepresentable, so such a deployment silently fell into the
+   * shared bucket and refused the sixth checkout site-wide.
    */
-  RATE_LIMIT_TRUSTED_PROXIES: z.coerce.number().int().min(1).max(8).default(1),
+  RATE_LIMIT_TRUSTED_PROXIES: z.coerce.number().int().min(0).max(8).default(1),
 
   /**
    * The admin surface (#17).
@@ -97,10 +103,39 @@ const serverSchema = z.object({
    * src/lib/admin/password.ts, and scripts/admin-password.mjs for producing one.
    */
   ADMIN_USERNAME: z.string().default("admin"),
-  ADMIN_PASSWORD_HASH: z.string().default(""),
+  ADMIN_PASSWORD_HASH: passwordHash(),
   /** Signs the session cookie. Rotating it signs every operator out. */
   ADMIN_SESSION_SECRET: z.string().default(""),
 });
+
+/**
+ * The admin password hash, validated at boot.
+ *
+ * Empty means "no admin surface" and is the default. Anything else has to be a
+ * hash this app can actually verify against — because the failure otherwise is
+ * silent and permanent: `adminConfigured()` sees a non-empty string and opens
+ * the sign-in page, `verifyPassword` throws on every attempt, `signIn` catches
+ * it and returns the same "not a valid sign-in" a wrong password gets, and the
+ * operator is locked out of their own panel with nothing in the logs to say
+ * why. The rate-limit policies below are parsed at boot for exactly this
+ * reason; the hash was the one variable that was not.
+ */
+function passwordHash() {
+  return z
+    .string()
+    .default("")
+    .superRefine((value, ctx) => {
+      if (value.length === 0) return;
+      try {
+        parsePasswordHash(value);
+      } catch (error) {
+        ctx.addIssue({
+          code: "custom",
+          message: error instanceof Error ? error.message : "invalid password hash",
+        });
+      }
+    });
+}
 
 /**
  * A rate-limit policy, parsed from its compact string form.

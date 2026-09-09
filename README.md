@@ -96,9 +96,11 @@ The hash is `:`-separated base64url rather than the conventional `$`-separated f
 because Next.js expands `$NAME` when it loads a `.env` file — the usual encoding comes
 back mangled and the only symptom is that the right password stops working.
 
-`.env.example` ships a working hash for local development and CI. It is a fixture, and
-the password behind it is published in that file; a real deployment replaces all three
-variables.
+`.env.example` carries a working fixture for local development and CI, **commented out**.
+The setup step is `cp .env.example .env.local`, so leaving them uncommented would mean a
+fresh deployment ran with a published session secret — and a public signing key is worse
+than a public password, because it mints valid cookies without going near the sign-in
+form. Uncomment them for local work; generate your own for anything else.
 
 **Refunds on a takedown: none.** See [`docs/REFUNDS.md`](docs/REFUNDS.md), and the
 decision it implements (D4) in [`docs/PLAN.md`](docs/PLAN.md).

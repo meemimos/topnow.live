@@ -275,7 +275,7 @@ describe("refreshStaleEmbeds", () => {
     const summary = await refreshStaleEmbeds(new Date(NOW.getTime() + REFRESH_AFTER_MS + 1), {
       transport,
     });
-    expect(summary).toEqual({ considered: 1, resolved: 1, failed: 0 });
+    expect(summary).toEqual({ considered: 1, resolved: 1, failed: 0, deferred: 0 });
   });
 
   it("leaves a fresh row alone", async () => {
@@ -305,6 +305,7 @@ describe("refreshStaleEmbeds", () => {
       considered: 0,
       resolved: 0,
       failed: 0,
+      deferred: 0,
     });
   });
 });
@@ -358,6 +359,78 @@ describe("the resolution limit (#18)", () => {
 
     const row = await ensureEmbed("youtube", POST, { now: stale, transport });
     expect(row?.status).toBe("ok");
+    expect(transport).not.toHaveBeenCalled();
+  });
+});
+
+describe("a post that was never resolved even once", () => {
+  async function seedQueued(postUrl: string | null) {
+    const quote = quoteForQueue(1, 3, 0);
+    await db.purchase.create({
+      data: {
+        slot: 1,
+        durationH: 3,
+        handle: "parcelkit",
+        platform: "youtube",
+        targetUrl: "https://youtube.com/@parcelkit",
+        postUrl,
+        tagline: "Open-source invoicing for freelancers who hate invoicing.",
+        priceHrCents: quote.askHrCents,
+        totalPaidCents: quote.totalCents,
+        status: "queued",
+      },
+    });
+  }
+
+  it("is picked up by the refresh, even though it has no row", async () => {
+    // Same hole the avatar cache had. The first attempt is in the Stripe
+    // webhook; a deferral there writes no row, and a refresher scanning only
+    // `embed` would never come back — slot 01 would render as a profile card
+    // for the whole rental with nothing recording why.
+    const transport = await workingTransport();
+    await seedQueued(POST);
+
+    const summary = await refreshStaleEmbeds(NOW, { transport });
+
+    expect(summary).toMatchObject({ considered: 1, resolved: 1, failed: 0, deferred: 0 });
+    expect((await db.embed.findMany())[0]?.status).toBe("ok");
+  });
+
+  it("does not re-ask about a post already settled as unavailable", async () => {
+    const transport = await workingTransport();
+    await seedQueued(POST);
+    await ensureEmbed("youtube", POST, { now: NOW, transport: failing });
+    await db.embed.update({
+      where: { postUrl: POST },
+      data: { status: "unavailable", failureReason: "deleted", resolvedAt: NOW },
+    });
+
+    const summary = await refreshStaleEmbeds(new Date(NOW.getTime() + REFRESH_AFTER_MS + 1), {
+      transport,
+    });
+
+    // A deleted post stays deleted. Treating a settled row as never-tried would
+    // make every one of them an outbound request on every tick — which is the
+    // rate-limit budget the negative cache exists to protect.
+    expect(summary.considered).toBe(0);
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it("reports a throttled pass as deferred rather than resolved", async () => {
+    const policy = serverConfig().RATE_LIMIT_EMBED;
+    const transport = await workingTransport();
+    await seedQueued(POST);
+    await ensureEmbed("youtube", POST, { now: NOW, transport });
+
+    const stale = new Date(NOW.getTime() + REFRESH_AFTER_MS + 1);
+    for (let i = 0; i < policy.burst; i += 1) {
+      await consume({ bucket: "embed", identity: "youtube", policy, now: stale });
+    }
+    transport.mockClear();
+
+    const summary = await refreshStaleEmbeds(stale, { transport });
+
+    expect(summary).toMatchObject({ considered: 1, resolved: 0, failed: 0, deferred: 1 });
     expect(transport).not.toHaveBeenCalled();
   });
 });

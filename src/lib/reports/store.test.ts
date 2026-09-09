@@ -249,3 +249,56 @@ describe("dismissReport", () => {
     ).toBeNull();
   });
 });
+
+describe("a dismissal that has to stick", () => {
+  it("is not undone by the same reporter re-filing", async () => {
+    const listing = await seedListing();
+    const hash = reporterHash("198.51.100.7");
+    const { report } = (await submitReport({ purchaseId: listing.id, reason: "other" }, hash)) as {
+      report: { id: string };
+    };
+    await dismissReport(report.id, { actor: "ops", reason: "Checked; it is their account." });
+
+    // The duplicate check used to key on `status: "open"`, so a dismissal did
+    // not stick: the same person could re-file the moment it closed and put the
+    // listing straight back in the queue — the pile-on the check exists to
+    // prevent, with an extra step.
+    expect((await submitReport({ purchaseId: listing.id, reason: "other" }, hash)).kind).toBe(
+      "duplicate",
+    );
+    expect(await openReports()).toHaveLength(0);
+  });
+
+  it("still lets a different person report the same listing", async () => {
+    const listing = await seedListing();
+    const { report } = (await submitReport(
+      { purchaseId: listing.id, reason: "other" },
+      reporterHash("198.51.100.7"),
+    )) as { report: { id: string } };
+    await dismissReport(report.id, { actor: "ops", reason: "no case" });
+
+    // One dismissal answers one reporter, not everybody.
+    expect(
+      (await submitReport({ purchaseId: listing.id, reason: "other" }, reporterHash("203.0.113.9")))
+        .kind,
+    ).toBe("recorded");
+  });
+
+  it("records which listing was left up, not just which report", async () => {
+    const listing = await seedListing();
+    const { report } = (await submitReport(
+      { purchaseId: listing.id, reason: "other" },
+      reporterHash("198.51.100.7"),
+    )) as { report: { id: string } };
+
+    await dismissReport(report.id, { actor: "ops", reason: "Checked; it is their account." });
+
+    // The trail is read as prose — "<who> left up <what>". Carrying only a
+    // report id gave the console nothing to resolve the listing from, so every
+    // dismissal rendered as "left up a listing", which answers the question
+    // nobody asks.
+    const [entry] = await db.adminAction.findMany();
+    expect(entry?.purchaseId).toBe(listing.id);
+    expect(entry?.reportId).toBe(report.id);
+  });
+});

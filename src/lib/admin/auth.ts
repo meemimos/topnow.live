@@ -5,7 +5,7 @@ import { timingSafeEqual } from "node:crypto";
 import { cookies, headers } from "next/headers";
 
 import { adminConfigured, serverConfig } from "@/lib/config/server";
-import { limiterAddress } from "@/lib/limit/address";
+import { limiterAddress, warnUnidentified } from "@/lib/limit/address";
 import { adminLimited } from "@/lib/limit/copy";
 import { consume } from "@/lib/limit/limiter";
 
@@ -63,12 +63,15 @@ export async function signIn(username: string, password: string): Promise<SignIn
   const config = serverConfig();
   const address = limiterAddress(await headers(), config.RATE_LIMIT_TRUSTED_PROXIES);
 
+  if (!address) warnUnidentified("admin", config.RATE_LIMIT_TRUSTED_PROXIES);
+
   const gate = await consume({
     bucket: "admin",
     // An unidentifiable caller shares one bucket with every other
-    // unidentifiable caller. On this endpoint that is the right trade: being
-    // strict costs an operator behind a misconfigured proxy a few minutes, and
-    // being lax costs the password.
+    // unidentifiable caller. On this endpoint that is the right trade, and it is
+    // the one place where it stays right even on a deployment with no proxy at
+    // all: being strict costs an operator a few minutes, and being lax costs the
+    // password.
     identity: address ?? "unidentified",
     policy: config.RATE_LIMIT_ADMIN,
     onFailure: "deny",

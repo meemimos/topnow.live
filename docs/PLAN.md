@@ -190,7 +190,15 @@ reachable the first time somebody forgets a variable, and "not configured" must 
 more forgiving state than "not signed in".
 
 The password is stored as a scrypt hash, so a leaked deployment config is a hash to attack
-offline rather than a working credential.
+offline rather than a working credential — and the hash is validated at boot, because one
+this app cannot parse still reads as "configured" and locks the operator out permanently
+with nothing in the logs.
+
+The fixture in `.env.example` is **commented out**. The setup step is
+`cp .env.example .env.local`, so an uncommented fixture is what a fresh deployment actually
+runs with — and a published `ADMIN_SESSION_SECRET` is worse than a published password: a
+public signing key mints valid cookies without going near the sign-in form or its limit.
+Review of #31 caught that; it had defeated the whole point of this decision.
 
 ### D7. The hash is `:`-separated base64url, not the conventional `$` form — RESOLVED
 
@@ -256,6 +264,15 @@ Registered against the build prompt's "Things I want you to push back on":
    `RATE_LIMIT_TRUSTED_PROXIES` hops back. Set that wrong and the limit is either trusting
    client-supplied text or bucketing everybody behind the proxy together — only the deployment
    knows the answer, so it is configuration rather than a guess (#18).
+
+   Corrected after review: `0` is now a valid value, meaning no proxy and therefore no knowable
+   address. It had been unrepresentable, so a deployment with nothing in front of it dropped
+   every visitor into one shared bucket and refused the sixth checkout **site-wide**. Where no
+   address can be established, checkout now warns and lets the buyer through — the queued-hours
+   cap (#24) already bounds queue-flooding, and a limiter that turns a misconfigured header into
+   a closed shop is worse than none. The report endpoint and admin sign-in keep the shared
+   bucket, because neither has a backstop and a degraded limit beats an open one.
+
 8. **A server action cannot return a 429.** Its response is a return value, not a status line.
    So checkout's limit renders the product's error treatment (which is what a person needs),
    and the endpoints that are genuinely machine-consumed — `/api/report`, admin sign-in —

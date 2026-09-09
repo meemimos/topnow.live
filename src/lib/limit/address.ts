@@ -23,7 +23,8 @@
  * The number of hops is configuration rather than a guess, because guessing it
  * wrong is a security bug in one direction (too many hops trusts client-supplied
  * text) and a lockout in the other (too few buckets everyone behind the proxy
- * together). It defaults to 1 — one reverse proxy, the ordinary deployment.
+ * together). It defaults to 1 — one reverse proxy, the ordinary deployment —
+ * and 0 says there is no proxy, so no address can be established at all.
  */
 
 /**
@@ -35,6 +36,10 @@
  * header lock out everyone else behind the same gap.
  */
 export function limiterAddress(headers: Headers, hops: number): string | null {
+  // 0 means "nothing trustworthy is in front of this app". Reading the headers
+  // at all in that mode would be reading text the client wrote, so it does not.
+  if (hops < 1) return null;
+
   const forwarded = headers.get("x-forwarded-for");
   if (forwarded) {
     const entries = forwarded
@@ -57,4 +62,34 @@ export function limiterAddress(headers: Headers, hops: number): string | null {
   // when nothing is in front of the app at all.
   const real = headers.get("x-real-ip")?.trim();
   return real && real.length > 0 ? real : null;
+}
+
+/** One warning per bucket per process, not one per request. */
+const warned = new Set<string>();
+
+/**
+ * Says, once, that a limit had no address to key on.
+ *
+ * This is a misconfiguration and it is silent by nature — the limiter still
+ * works, it just stops distinguishing callers — so something has to say so. It
+ * fires once per bucket per process because the alternative is a line per
+ * request, which is how a real signal gets scrolled past.
+ */
+export function warnUnidentified(bucket: string, hops: number): void {
+  if (warned.has(bucket)) return;
+  warned.add(bucket);
+
+  console.warn(
+    `[limit] ${bucket}: no client address could be established ` +
+      `(RATE_LIMIT_TRUSTED_PROXIES=${hops}). ` +
+      (hops < 1
+        ? "No proxy is configured, so there is nothing to read an address from."
+        : "Nothing in front of this app is setting x-forwarded-for or x-real-ip — " +
+          "check the proxy, or set RATE_LIMIT_TRUSTED_PROXIES=0 if there is none."),
+  );
+}
+
+/** Only exported so a test can start from a clean slate. */
+export function resetUnidentifiedWarnings(): void {
+  warned.clear();
 }

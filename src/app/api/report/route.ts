@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { serverConfig } from "@/lib/config/server";
-import { limiterAddress } from "@/lib/limit/address";
+import { limiterAddress, warnUnidentified } from "@/lib/limit/address";
 import { reportLimited } from "@/lib/limit/copy";
 import { tooManyRequests } from "@/lib/limit/http";
 import { consume } from "@/lib/limit/limiter";
@@ -32,6 +32,14 @@ export const dynamic = "force-dynamic";
 export async function POST(request: NextRequest) {
   const { RATE_LIMIT_REPORT, RATE_LIMIT_TRUSTED_PROXIES } = serverConfig();
   const address = limiterAddress(request.headers, RATE_LIMIT_TRUSTED_PROXIES);
+
+  // Unlike checkout, an unidentifiable caller still shares one bucket here. The
+  // opposite call, for the opposite reason: checkout has the queued-hours cap
+  // behind it, so failing open costs nothing that is not already bounded. This
+  // endpoint has no such backstop — it is an unauthenticated write, and failing
+  // open would leave it wide. A shared bucket degrades the limit; no bucket
+  // removes it.
+  if (!address) warnUnidentified("report", RATE_LIMIT_TRUSTED_PROXIES);
 
   const gate = await consume({
     bucket: "report",

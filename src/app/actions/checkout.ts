@@ -4,7 +4,7 @@ import { headers } from "next/headers";
 
 import { fieldErrors, parseCheckout } from "@/lib/checkout/schema";
 import { serverConfig, stripeConfigured } from "@/lib/config/server";
-import { limiterAddress } from "@/lib/limit/address";
+import { limiterAddress, warnUnidentified } from "@/lib/limit/address";
 import { checkoutLimited } from "@/lib/limit/copy";
 import { consume } from "@/lib/limit/limiter";
 import { liveGateway } from "@/lib/payments/stripe";
@@ -137,16 +137,24 @@ async function checkoutRefusal(): Promise<StartPaymentResult | null> {
   const { RATE_LIMIT_CHECKOUT, RATE_LIMIT_TRUSTED_PROXIES } = serverConfig();
   const address = limiterAddress(await headers(), RATE_LIMIT_TRUSTED_PROXIES);
 
-  // No address the deployment vouches for. Refusing outright would let one
-  // client with a stripped header lock out everyone; letting it through
-  // unlimited would make the header optional. The middle answer is to bucket
-  // every unidentifiable caller together — they share one budget, and the
-  // queued-hours cap (#24) is what actually bounds the damage either way.
-  const identity = address ?? "unidentified";
+  // No address the deployment vouches for, so there is nobody to pace. An
+  // earlier version bucketed every such caller together, which reads as prudent
+  // and is not: on a deployment with no proxy — `npm start` on a box, a
+  // perfectly real thing — *every* visitor lands in that one bucket and the
+  // sixth checkout site-wide is refused. A limiter that turns a misconfigured
+  // header into a shop with the shutters down is worse than no limiter here,
+  // because the queued-hours cap (#24) already bounds what flooding the queue
+  // can achieve. So this path warns and lets the buyer through.
+  //
+  // The report endpoint and admin sign-in make the opposite call, and say why.
+  if (!address) {
+    warnUnidentified("checkout", RATE_LIMIT_TRUSTED_PROXIES);
+    return null;
+  }
 
   const gate = await consume({
     bucket: "checkout",
-    identity,
+    identity: address,
     policy: RATE_LIMIT_CHECKOUT,
   });
   if (gate.allowed) return null;
