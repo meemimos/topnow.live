@@ -106,6 +106,9 @@ model Purchase {
   /// idempotent under duplicate delivery (#26) — a constraint, not a check.
   stripeSessionId String? @unique @db.VarChar(255)
 
+  /// Abuse reports against this listing (#17).
+  reports Report[]
+
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
@@ -304,4 +307,140 @@ model Visit {
   @@unique([visitorHash, bucket])
   @@index([lastSeenAt])
   @@map("visit")
+}
+
+/// One rate-limit bucket (#18).
+///
+/// Shared storage, because a limiter held in process memory does nothing behind
+/// more than one server — the second instance simply has its own budget. This is
+/// the store TopNow already has.
+///
+/// One row per bucket per caller, holding a single timestamp: `tat` is the time
+/// the bucket is paid up to. See src/lib/limit/limiter.ts for the algorithm and
+/// for why the decision is an UPDATE rather than a read followed by a write.
+model RateLimit {
+  /// `<bucket>:<truncated sha256 of the salted identity>`. Never an address and
+  /// never a user agent: the limiter needs to tell callers apart and nothing
+  /// more, and a table of visitor IPs is not a thing to accumulate as a side
+  /// effect of a safety feature.
+  key String @id @db.VarChar(128)
+
+  /// Theoretical arrival time — when this bucket is paid up to. A row whose
+  /// `tat` is in the past permits exactly what no row at all permits.
+  tat DateTime @db.Timestamptz(3)
+
+  /// When the bucket has certainly refilled, so the hourly job can delete it.
+  expiresAt DateTime @db.Timestamptz(3)
+
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([expiresAt])
+  @@map("rate_limit")
+}
+
+/// Why a listing was reported (#17).
+///
+/// A closed list rather than free text, because the reason decides how urgently
+/// a report is looked at and free text cannot be sorted by urgency. `other`
+/// exists so the list never becomes a reason to not report something.
+enum ReportReason {
+  /// Someone listed a handle they do not own.
+  impersonation
+  /// The target URL leads somewhere harmful.
+  malicious_link
+  /// The tagline or display name is abusive.
+  abusive_copy
+  other
+}
+
+enum ReportStatus {
+  /// Waiting on a human.
+  open
+  /// Looked at, and the listing was killed.
+  upheld
+  /// Looked at, and the listing stays. Kept rather than deleted, because a
+  /// pattern of dismissed reports about one account is itself information.
+  dismissed
+}
+
+/// One abuse report against one listing (#17).
+///
+/// No account is required to file one — requiring an account on the reporting
+/// path means the person being impersonated has to sign up to say so. That makes
+/// the report box itself an abuse vector, which is why it is rate limited (#18)
+/// and why `reporterHash` exists.
+model Report {
+  id String @id @default(uuid()) @db.Uuid
+
+  purchaseId String   @db.Uuid
+  purchase   Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+
+  reason  ReportReason
+  /// What the reporter wrote. Rendered as text in the admin surface, never as
+  /// markup, and never shown on the public board.
+  detail  String?      @db.VarChar(1000)
+  /// Optional, and optional on purpose: a reporter who wants to be told the
+  /// outcome can say how, and one who does not is not made to.
+  contact String?      @db.VarChar(200)
+
+  /// A salted, daily-rotating hash of the reporter's address — the same
+  /// construction the visit counter uses (#15) and for the same reason. It
+  /// answers "is this ten people or one person ten times", which is the question
+  /// that decides how much weight a pile of reports carries, and it answers
+  /// nothing else. It is not reversible and does not link across days.
+  reporterHash String @db.VarChar(64)
+
+  status ReportStatus @default(open)
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  reviewedAt DateTime? @db.Timestamptz(3)
+  /// The admin who closed it. Constrained in the migration to accompany
+  /// `reviewedAt`, so a reviewed report always says who reviewed it.
+  reviewedBy String?   @db.VarChar(64)
+
+  /// The queue a human works through.
+  @@index([status, createdAt])
+  @@index([purchaseId])
+  @@map("report")
+}
+
+enum AdminActionKind {
+  /// A listing was taken down.
+  kill
+  /// A report was looked at and the listing left alone.
+  dismiss
+}
+
+/// The audit trail (#17).
+///
+/// The issue calls this non-optional, and the reason is worth writing down: this
+/// is the record that matters if a takedown is ever challenged. It is
+/// append-only by intent — nothing in the app updates or deletes a row here, and
+/// a kill writes one in the same transaction that kills, so there is no ordering
+/// in which a listing is taken down without a record of who did it.
+model AdminAction {
+  id String @id @default(uuid()) @db.Uuid
+
+  kind AdminActionKind
+
+  /// The admin username from the session. Not an id, because the record has to
+  /// stay readable after the account it names is gone.
+  actor String @db.VarChar(64)
+
+  /// The listing acted on. Not a foreign key with a cascade: a purchase is never
+  /// deleted, and if that ever changed the audit record must outlive it.
+  purchaseId String? @db.Uuid
+  /// The report that prompted it, when there was one. A kill does not require a
+  /// report — an admin who sees the board can act on what they see.
+  reportId   String? @db.Uuid
+
+  /// Why. Constrained in the migration to be non-empty: an audit record with no
+  /// reason answers the least interesting half of the question.
+  reason String @db.VarChar(500)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([createdAt])
+  @@index([purchaseId])
+  @@map("admin_action")
 }

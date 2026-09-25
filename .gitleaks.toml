@@ -17,3 +17,17 @@ regexes = [
   '''not-a-real-value''',
   '''replace-me''',
 ]
+
+[[allowlists]]
+description = """
+scrypt password hashes. The format is self-describing (scrypt:N:r:p:salt:hash)
+and a hash is not a credential — it is the thing stored precisely so that the
+credential does not have to be. ADMIN_PASSWORD_HASH holds one, and the fixture
+in .env.example and CI is published on purpose so the admin surface exists in
+tests. A leaked hash still costs an offline attack against scrypt's cost
+parameters, which is the whole reason for storing one.
+"""
+regexTarget = "match"
+regexes = [
+  '''scrypt:\d+:\d+:\d+:''',
+]

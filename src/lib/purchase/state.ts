@@ -251,7 +251,15 @@ export async function tape(limit = 50): Promise<Purchase[]> {
  * Killing the live rental frees the slot and promotes the next queued purchase
  * in the same transaction, so nobody sees a slot that is briefly nobody's. The
  * row stays in the ledger marked killed — the tape is a record and does not get
- * rewritten.
+ * rewritten, and the sale still happened so it stays in the chart's history.
+ *
+ * The audit record and the closing of any open reports happen inside that same
+ * transaction. A kill that succeeded while its audit record failed would be the
+ * one case the trail exists for and the one case it would be missing.
+ *
+ * Decision D4: a killed rental is not refunded. The remaining hours are
+ * forfeited, which is why the terms and the checkout say so before anyone pays
+ * rather than at the moment it is discovered.
  */
 export class NotKillableError extends Error {
   constructor(
@@ -263,11 +271,27 @@ export class NotKillableError extends Error {
   }
 }
 
-export async function killPurchase(
-  id: string,
-  reason: string,
-  now: Date = new Date(),
-): Promise<{ killed: Purchase; promoted: Purchase | null }> {
+export type KillOptions = {
+  /** Why. Written to the row and to the audit record; never blank. */
+  reason: string;
+  /** The admin username from the session. This is the "who" of the audit trail. */
+  actor: string;
+  /** The report that prompted it, when there was one. */
+  reportId?: string;
+  now?: Date;
+};
+
+export type KillOutcome = {
+  killed: Purchase;
+  promoted: Purchase | null;
+  /** Open reports against this listing that this kill closed. */
+  reportsUpheld: number;
+};
+
+export async function killPurchase(id: string, options: KillOptions): Promise<KillOutcome> {
+  const { reason, actor, reportId } = options;
+  const now = options.now ?? new Date();
+
   return inSerializableTransaction(async (tx) => {
     const target = await tx.purchase.findUniqueOrThrow({ where: { id } });
 
@@ -284,12 +308,26 @@ export async function killPurchase(
       data: { status: "killed", killedAt: now, killedReason: reason },
     });
 
+    // In the same transaction as the kill, not after it. There is no ordering in
+    // which a listing comes off the board without a record of who took it down —
+    // which is the whole point of an audit trail, and would not hold if this were
+    // a second call that could fail on its own.
+    await tx.adminAction.create({
+      data: { kind: "kill", actor, purchaseId: id, reportId: reportId ?? null, reason },
+    });
+
+    // Anything still open about this listing has now been answered.
+    const { count: reportsUpheld } = await tx.report.updateMany({
+      where: { purchaseId: id, status: "open" },
+      data: { status: "upheld", reviewedAt: now, reviewedBy: actor },
+    });
+
     // Only a live kill leaves a hole to fill. Killing from the queue just frees
     // its hours, which the next capacity check picks up on its own.
     const promoted =
       target.status === "live" ? await promoteWithin(tx, target.slot as Slot, now) : null;
 
-    return { killed, promoted };
+    return { killed, promoted, reportsUpheld };
   });
 }
 

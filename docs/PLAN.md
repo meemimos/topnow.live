@@ -178,6 +178,48 @@ possible at all, and it is the only URL in the product a buyer types rather than
 product derives — so it is validated against the platform's own hosts and a post-shaped
 path before it is ever sent anywhere.
 
+### D6. The admin surface's default is off — RESOLVED
+
+Gates #17.
+
+`/admin`, `/admin/login` and every admin API route answer **404** until `ADMIN_USERNAME`,
+`ADMIN_PASSWORD_HASH` and `ADMIN_SESSION_SECRET` are all set.
+
+The alternative — a panel that exists but refuses a default password — is one that ships
+reachable the first time somebody forgets a variable, and "not configured" must never be a
+more forgiving state than "not signed in".
+
+The password is stored as a scrypt hash, so a leaked deployment config is a hash to attack
+offline rather than a working credential — and the hash is validated at boot, because one
+this app cannot parse still reads as "configured" and locks the operator out permanently
+with nothing in the logs.
+
+The fixture in `.env.example` is **commented out**. The setup step is
+`cp .env.example .env.local`, so an uncommented fixture is what a fresh deployment actually
+runs with — and a published `ADMIN_SESSION_SECRET` is worse than a published password: a
+public signing key mints valid cookies without going near the sign-in form or its limit.
+Review of #31 caught that; it had defeated the whole point of this decision.
+
+### D7. The hash is `:`-separated base64url, not the conventional `$` form — RESOLVED
+
+Next.js expands `$NAME` when it loads a `.env` file, so `scrypt$16384$8$1$…` arrives as
+`scrypt6384…` — every `$1`, `$8` and `$p` replaced by an empty variable. The only symptom is
+that the correct password stops working, and it failed exactly that way here before the
+format changed. Nothing in `:` or base64url is special to a shell or a dotenv loader.
+
+The same trap applies to any value in `.env`: a literal `$` is read as a variable.
+
+### D8. Rate limiting is Postgres-backed, not Redis — RESOLVED
+
+Gates #18, whose requirement is shared storage rather than per-instance memory.
+
+Postgres is the shared store TopNow already runs. Redis would be faster and is the usual
+answer; adding a second stateful dependency to the deployment, for four endpoints that are
+not hot paths, is an operational cost paid for latency nobody is measuring.
+
+The algorithm is GCRA rather than a fixed window, because a fixed window permits twice the
+limit across a boundary and its `Retry-After` is wrong for everyone who arrives mid-window.
+
 ## Settled — tape ordering
 
 `docs/build-prompt.md` specifies `tape = status = ended, ordered by bought_at descending`,
@@ -217,3 +259,26 @@ Registered against the build prompt's "Things I want you to push back on":
 6. **"Looking at slot 01 right now" is not measurable** without instrumenting scroll position
    per visitor. The line says "on the board right now" instead (#15) — the prototype's panel
    shape with a claim the server can stand behind.
+7. **A per-IP rate limit is only as good as the address it keys on.** `x-forwarded-for` is
+   client-writable at the left-hand end, so the limiter reads it from the **right**, counting
+   `RATE_LIMIT_TRUSTED_PROXIES` hops back. Set that wrong and the limit is either trusting
+   client-supplied text or bucketing everybody behind the proxy together — only the deployment
+   knows the answer, so it is configuration rather than a guess (#18).
+
+   Corrected after review: `0` is now a valid value, meaning no proxy and therefore no knowable
+   address. It had been unrepresentable, so a deployment with nothing in front of it dropped
+   every visitor into one shared bucket and refused the sixth checkout **site-wide**. Where no
+   address can be established, checkout now warns and lets the buyer through — the queued-hours
+   cap (#24) already bounds queue-flooding, and a limiter that turns a misconfigured header into
+   a closed shop is worse than none. The report endpoint and admin sign-in keep the shared
+   bucket, because neither has a backstop and a degraded limit beats an open one.
+
+8. **A server action cannot return a 429.** Its response is a return value, not a status line.
+   So checkout's limit renders the product's error treatment (which is what a person needs),
+   and the endpoints that are genuinely machine-consumed — `/api/report`, admin sign-in —
+   return a real 429 with a real `Retry-After` (#18).
+9. **Nothing at checkout can prove a buyer owns the handle they typed.** No platform offers
+   that check without an authenticated integration, and asking for a login would put an
+   account wall in front of a product whose whole pitch is that there is no account. So
+   ownership is enforced after the fact: a report path on every listing, and a takedown (#17).
+   That is the honest design, not a gap in it.

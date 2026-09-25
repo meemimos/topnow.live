@@ -142,29 +142,36 @@
    Base
    =========================================================================== */
 
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-  border-radius: 0;
-}
+/* Layered, and that is load-bearing rather than tidiness.
+   Unlayered CSS beats *every* cascade layer regardless of specificity, so an
+   unlayered `a { color }` overrode `text-paper` on a link styled as a primary
+   button — "PAY FOR TIME" rendered navy-on-navy and was unreadable. Inside
+   @layer base it loses to Tailwind's utilities, which is the intended order. */
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+    border-radius: 0;
+  }
 
-body {
-  margin: 0;
-  background: var(--color-ground);
-  color: var(--color-ink);
-  font-family: var(--font-sans);
-}
+  body {
+    margin: 0;
+    background: var(--color-ground);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+  }
 
-a {
-  color: #0000ee;
-  text-decoration: underline;
-}
-a:visited {
-  color: #551a8b;
-}
-a:hover {
-  color: #ee0000;
+  a {
+    color: #0000ee;
+    text-decoration: underline;
+  }
+  a:visited {
+    color: #551a8b;
+  }
+  a:hover {
+    color: #ee0000;
+  }
 }
 
 /* Amber, not navy. The build prompt says navy focus rings, but the prototype

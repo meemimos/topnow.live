@@ -67,6 +67,23 @@ export function formatClock(at: Date, timeZone = "UTC"): string {
   }).format(at);
 }
 
+/**
+ * The same stamp with seconds, for the status bar's server clock (#5).
+ *
+ * Seconds because the bar is claiming to show *the server's* time — a readout
+ * that only changes once a minute cannot be told from a frozen one, and the
+ * whole point of printing it is that it is live.
+ */
+export function formatClockWithSeconds(at: Date, timeZone = "UTC"): string {
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+    timeZone,
+  }).format(at);
+}
+
 /** Whether two instants fall on different calendar days in the given zone. */
 export function isDifferentDay(a: Date, b: Date, timeZone = "UTC"): boolean {
   const format = new Intl.DateTimeFormat("en-CA", {

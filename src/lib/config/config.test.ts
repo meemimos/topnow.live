@@ -102,3 +102,47 @@ describe("client config", () => {
     );
   });
 });
+
+describe("the admin surface's configuration (#17)", () => {
+  const REAL_HASH =
+    "scrypt:16384:8:1:mIjb3dr-GGv6yE55CAa-zw:IqL1mEbSLLRWX9dsD3z5J6gNO7cwYv31mEqqfCGzpUo";
+
+  it("leaves the surface off when nothing is set", () => {
+    const config = parseServerConfig(validServerEnv);
+    expect(config.ADMIN_PASSWORD_HASH).toBe("");
+    expect(config.ADMIN_SESSION_SECRET).toBe("");
+  });
+
+  it("accepts a real hash", () => {
+    const config = parseServerConfig({ ...validServerEnv, ADMIN_PASSWORD_HASH: REAL_HASH });
+    expect(config.ADMIN_PASSWORD_HASH).toBe(REAL_HASH);
+  });
+
+  it.each([
+    ["a bare password", "hunter2hunter2"],
+    ["the conventional $-separated form a dotenv loader mangles", "scrypt$16384$8$1$c2FsdA$aGFzaA"],
+    ["a truncated hash", "scrypt:16384:8:1:mIjb3dr-GGv6yE55CAa-zw"],
+    ["a cost nobody should accept", "scrypt:2:8:1:c2FsdGluZ3NhbHQ:aGFzaA"],
+  ])("refuses %s at boot", (_label, hash) => {
+    // Not merely tidiness. A hash this app cannot parse still reads as
+    // "configured", so the sign-in page renders, `verifyPassword` throws on
+    // every attempt, `signIn` catches it and returns the same message a wrong
+    // password gets — and the operator is locked out of their own admin panel
+    // permanently, with nothing in the logs saying why. Failing at boot turns a
+    // silent permanent lockout into a named startup error.
+    expect(() => parseServerConfig({ ...validServerEnv, ADMIN_PASSWORD_HASH: hash })).toThrow(
+      /ADMIN_PASSWORD_HASH/,
+    );
+  });
+
+  it("allows a deployment to declare that no proxy sits in front of it", () => {
+    // Previously `.min(1)`, so this was unrepresentable — and a deployment with
+    // nothing in front of it therefore had no address for any caller, dropped
+    // everyone into one shared bucket, and refused the sixth checkout
+    // site-wide.
+    expect(
+      parseServerConfig({ ...validServerEnv, RATE_LIMIT_TRUSTED_PROXIES: "0" })
+        .RATE_LIMIT_TRUSTED_PROXIES,
+    ).toBe(0);
+  });
+});

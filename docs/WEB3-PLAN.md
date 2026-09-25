@@ -1,0 +1,463 @@
+# TopNow → web3 ad platform
+
+**Status: proposed, not started. Testnet only until @meemimos says otherwise.**
+
+The product does not change shape: three slots, rented by the hour, and when the countdown
+hits zero the slot reopens. What changes is who buys them and how they pay — crypto projects,
+in USDC, on Base — and what a slot carries: a token, a contract address, a CTA.
+
+This plan is written against the codebase as it stands at
+[#31](https://github.com/meemimos/topnow.live/pull/31). Read `docs/PLAN.md` first; the decisions
+there (D1–D8) still hold, and several of them constrain what follows.
+
+---
+
+## Where the existing product stands
+
+|               |                                                                               |
+| ------------- | ----------------------------------------------------------------------------- |
+| **Stack**     | Next.js 16 App Router (RSC), React 19, TypeScript strict, Tailwind 4, Radix   |
+| **Data**      | Prisma 7 → PostgreSQL via `@prisma/adapter-pg`                                |
+| **Payments**  | Stripe Checkout; the purchase row is created **only** by the verified webhook |
+| **Tests**     | Vitest (826 unit, against a real Postgres) + Playwright (289 e2e)             |
+| **Deploy**    | Not configured. CI is GitHub Actions only (`verify` + gitleaks)               |
+| **Scheduler** | `POST /api/cron/hourly`, authenticated by `CRON_SECRET`                       |
+
+Four properties of the current design matter to everything below.
+
+**Liveness is derived, never written.** A rental is on the board when
+`startsAt <= now < endsAt`. No job flips `live → ended`; expiry costs nothing and cannot be
+missed. The only genuine write is promotion, guarded by the partial unique index
+`purchase_one_live_per_slot` inside a serializable transaction. This is the property a contract
+has to preserve — and, happily, the one that makes an O(1) contract possible.
+
+**One table is the whole product.** A queue entry and a completed sale are the same `Purchase`
+row at different points in its life (`queued → live → ended`, or `→ killed`).
+
+**Price is locked at purchase and never recomputed.** `multiplier = 1 + min(queued_hours / 24, 1)`,
+capped at 2.00×, decaying 5%/hr toward base. A slot stops accepting bookings once
+live-remaining + queued exceeds 24h.
+
+**Never fabricate activity, prices, or counts.** From the build prompt, non-negotiable. It
+governs the new per-slot stats as strictly as it governs the existing ones.
+
+---
+
+## Decisions — resolved by @meemimos, 2026-09-25
+
+### W1. Chain and token — Base only, USDC only
+
+Base Sepolia for all development. No Solana. USDC only, so there is no price oracle and
+therefore no oracle risk; prices stay integer minor units end to end, as they already are.
+
+### W2. Outbidding — not in the MVP
+
+The MVP keeps the queue exactly as it is: no mid-hour takeovers. Outbidding arrives in phase 2,
+applies only to the **live** slot, requires **≥10% over the current rate**, and respects a
+**15-minute protected window** after a tenant starts. The queue survives an outbid and shifts.
+
+### W3. Custody — contract escrow, earned pro-rata
+
+Payment goes upfront into escrow and is earned as time elapses, so unused time is refundable.
+Refunds are **pull-to-claim**, never pushed: a push to an address that reverts is a griefing
+vector, and USDC can block an address.
+
+Platform revenue is withdrawable at any time by a **Safe multisig**.
+
+### W4. Pricing — the existing curve, signed offchain
+
+The surge/decay curve stays and continues to be computed offchain. The server issues an
+**EIP-712 signed quote** carrying an expiry and a nonce; the contract verifies the signature and
+rejects anything expired or replayed. A locked buyer is never re-priced.
+
+**Consequence to carry:** a server that signs quotes can sign `rate = 0`. The contract therefore
+enforces a per-slot `minRateHr` floor, so a compromised signer can discount but cannot zero out.
+The signer is rotatable.
+
+### W5. Slot content — onchain rental, offchain content, hashed
+
+Logo, name, ticker, contract address, chain, CTA type (Mint/Swap/Join) and CTA URL. No video in
+the MVP; if it lands later it is self-hosted, because the board makes **zero third-party
+requests** by design (#19, #20) and an embedded player would undo that in one line.
+
+The rental is onchain. The content lives in the database keyed by rental id, with a
+`contentHash` stored onchain so the content that was approved is the content that is provable.
+
+### W6. Moderation — pre-approval for newcomers
+
+First-time advertisers are pre-approved by hand (@meemimos staffs it); approved advertisers skip
+the queue on later rentals. A rejected rental is **fully refunded** from escrow. Admin kill works
+onchain and refunds unused time.
+
+Automated badges: contract verified (Basescan API), LP lock status. Manual: audit link.
+
+### W7. Auth — both paths stay
+
+Wallet connect for crypto buyers; **Stripe coexists** for fiat buyers. The existing
+password-and-session admin stays for the web UI; onchain admin actions go through the Safe.
+
+### W8. Infrastructure
+
+Vercel, Neon, Alchemy. Logs are polled in the existing hourly job rather than indexed by a
+subgraph — three slots do not justify an indexer, and the job already exists and is authenticated.
+
+Telegram first for announcements, then X.
+
+### W9. Regulatory — Australia
+
+Legal advice before mainnet. Built in from the start: a disclaimer on every slot, a submission-time
+ban on securities-like offerings and yield promises, and an admin-configurable geo-block list.
+
+**Prediction-with-payout is dropped.** Phase 2's viewer rewards are non-monetary points and badges
+only. A prediction market with a payout is a materially different regulatory object from an ad
+board, and it is not worth carrying.
+
+---
+
+## Three decisions this plan makes
+
+### W10. The contract schedules in O(1), with no loops
+
+A queue, fixed durations and no mid-hour takeover together mean the schedule can be computed
+without iterating anything:
+
+```
+startsAt = max(now, freeAt[slot])
+endsAt   = startsAt + durationH * 1 hours
+freeAt[slot] = endsAt
+```
+
+Liveness onchain is then derived exactly as it already is offchain — `startsAt <= now < endsAt` —
+so there is no promotion transaction, no cron dependency, and no unbounded iteration anywhere.
+The existing 24-hour wait cap is one comparison: `freeAt - now <= 24h`.
+
+This is the closest fit between the architecture that exists and a contract, which is why it is
+worth keeping the queue in the MVP rather than starting from an auction.
+
+### W11. Fiat rentals are registered onchain — **NEEDS CONFIRMATION**
+
+Fiat and crypto compete for the same three slots, but only the contract knows `freeAt`. A Stripe
+purchase is invisible to it, so the two paths would double-book.
+
+| Option                                              | Trade                                                                                                                                                                                                                                                                           |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **(i) Register fiat rentals onchain** — recommended | The webhook calls an owner-only `registerFiat(...)` with zero payment. One authoritative schedule for both paths. Costs a sub-cent transaction per fiat sale, and couples the webhook to a transaction that can fail — mitigated by a retry queue reconciled in the hourly job. |
+| (ii) Separate boards                                | No coupling, but "the leaderboard" becomes two leaderboards, which is a worse product.                                                                                                                                                                                          |
+| (iii) Drop Stripe                                   | Cleanest contract; loses the fiat buyers W7 keeps.                                                                                                                                                                                                                              |
+
+Planned as (i). **Confirm before phase 1 starts** — it shapes the contract interface.
+
+### W12. A kill leaves a hole in the schedule
+
+Killing a **live** rental frees the slot, but rentals behind it keep their scheduled start.
+Pulling them forward needs either an unbounded loop (banned) or a per-slot shift accumulator that
+gets subtle quickly — a rental that has already started must not be shifted, and the bookkeeping
+to know that is exactly the complexity the O(1) design avoids.
+
+The MVP takes the hole and says so in the UI. Phase 2 solves it properly alongside outbidding,
+which has the identical "tenant left early" shape.
+
+---
+
+## Phase 0 — foundations
+
+**Blocked on the network policy.** The container's proxy currently denies every host this needs:
+
+- `foundry.paradigm.xyz` and `github.com/foundry-rs/*` — the installer, and `forge install` for OpenZeppelin
+- `sepolia.base.org`, `*.g.alchemy.com` — RPC
+- `api-sepolia.basescan.org` — verification and the trust badges
+
+Nothing onchain can be built until these are allowlisted.
+
+**Create**
+
+- `contracts/` as a Foundry root: `foundry.toml`, `remappings.txt`, `lib/`, `contracts/.gitignore`
+- `.github/workflows/contracts.yml` — `forge fmt --check`, `forge build`, `forge test -vvv`, `forge coverage`
+
+**Change**
+
+- `README.md` — a contracts section
+- `.env.example` — `BASE_SEPOLIA_RPC_URL`, `SLOT_MARKET_ADDRESS`, `USDC_ADDRESS`,
+  `QUOTE_SIGNER_ADDRESS`, `ALCHEMY_API_KEY`, `BASESCAN_API_KEY`, **all commented out**
+
+That last point is not housekeeping. #31's review found that an uncommented fixture in
+`.env.example` is what a fresh deployment actually runs with, because the setup step is
+`cp .env.example .env.local`. The same rule applies to every variable added here.
+
+**Risks**
+
+No private key ever enters the repository or `.env.example`. Deployment uses a `cast wallet`
+keystore or the Safe; CI never holds a key and never deploys.
+
+---
+
+## Phase 1 — `SlotMarket.sol` and its tests
+
+**Create**
+
+- `contracts/src/SlotMarket.sol`, `contracts/src/ISlotMarket.sol`
+- `contracts/test/{Rent,Settle,Kill,Cancel,Claim,Admin,Quote}.t.sol`
+- `contracts/test/fuzz/{Accounting,Schedule}.t.sol`
+- `contracts/test/invariant/SlotMarketInvariants.t.sol`
+- `contracts/test/mocks/MockUSDC.sol`
+- `contracts/script/Deploy.s.sol`
+
+### Interface
+
+```solidity
+enum Status { Active, Settled, Killed, Cancelled }
+
+struct Rental {
+    address renter;
+    uint8   slot;          // 1..3
+    uint16  durationH;     // 1 | 3 | 6 | 12 | 24
+    uint64  startsAt;
+    uint64  endsAt;
+    uint128 paid;          // USDC, 6 decimals
+    uint128 rateHr;
+    bytes32 contentHash;
+    Status  status;
+}
+
+struct Quote {             // EIP-712, signed by QUOTE_SIGNER
+    address renter;
+    uint8   slot;
+    uint16  durationH;
+    uint128 rateHr;
+    bytes32 contentHash;
+    uint256 nonce;
+    uint64  expiry;
+}
+
+function rent(Quote calldata q, bytes calldata sig) external returns (uint256 id);
+function rentWithPermit(Quote calldata q, bytes calldata sig, Permit calldata p)
+    external returns (uint256 id);
+
+// Owner-only, zero payment. See W11.
+function registerFiat(address renter, uint8 slot, uint16 durationH, bytes32 contentHash)
+    external returns (uint256 id);
+
+function settle(uint256 id) external;                    // permissionless, after endsAt
+function settleMany(uint256[] calldata ids) external;    // length-capped
+function cancel(uint256 id) external;                    // renter, only before startsAt
+function kill(uint256 id, string calldata reason) external;   // owner (Safe)
+function claim() external;                               // pull refunds
+function withdraw(address to, uint128 amount) external;  // owner (Safe)
+
+function setQuoteSigner(address next) external;
+function setMinRate(uint8 slot, uint128 rateHr) external;
+function setPaused(bool paused) external;
+
+function freeAt(uint8 slot) external view returns (uint64);
+function rentalOf(uint256 id) external view returns (Rental memory);
+function earnedOf(uint256 id, uint64 at) external view returns (uint128);
+```
+
+Every state change emits: `Rented`, `Settled`, `Killed`, `Cancelled`, `Claimed`, `Withdrawn`,
+`QuoteSignerChanged`, `MinRateChanged`, `PausedSet`.
+
+### Accounting
+
+```
+paid   = rateHr * durationH
+earned = paid * clamp(now - startsAt, 0, duration) / duration
+refund = paid - earned
+```
+
+Settlement is O(1) per rental: earned moves to `platformBalance`, unearned moves to
+`claimable[renter]`. **No balance is ever computed by summing over rentals** — that is what
+would force an unbounded loop, and it is why settlement is per-rental and permissionless. The
+hourly job settles what is due in capped batches; anyone else may too.
+
+`cancel` is deliberately limited to a rental that has **not yet started**. A renter cancelling a
+live rental would be a self-service refund of time the board has already given them, and it would
+make the board unstable for everyone downstream.
+
+### What the contract enforces rather than trusts
+
+The server proposes; the contract checks. A lying or compromised server cannot get past:
+
+- a valid EIP-712 signature from the current signer, with `chainId` bound in the domain
+- an unexpired `expiry` and an unspent `nonce` — no replay
+- `rateHr >= minRate[slot]` — the floor from W4
+- `durationH` is one of the five snap points
+- `startsAt >= freeAt[slot]` — non-overlap, enforced onchain even though scheduling is offchain
+- `freeAt - now <= 24h` — the existing wait cap
+- not paused
+
+### Libraries and discipline
+
+OpenZeppelin `Ownable2Step`, `Pausable`, `ReentrancyGuard`, `SafeERC20`, `EIP712`, `ECDSA`,
+`Nonces`. Checks-effects-interactions throughout; `claim()` zeroes the balance before transferring.
+
+### Tests
+
+Unit tests per function. Fuzz over `(rateHr, durationH, elapsed)` asserting
+`earned + refund == paid` exactly — no dust created or destroyed — and that `earned` is monotonic
+in time. Invariant tests asserting
+`USDC.balanceOf(market) >= platformBalance + Σ claimable + Σ paid(unsettled)` and that no two
+rentals on a slot ever overlap.
+
+### Risks
+
+| Risk                             | Mitigation                                                                                |
+| -------------------------------- | ----------------------------------------------------------------------------------------- |
+| Reentrancy                       | CEI, `ReentrancyGuard`, and pull-based refunds — there is no push to an arbitrary address |
+| Signature replay                 | Nonce, expiry, and `chainId` in the EIP-712 domain                                        |
+| Hot signer key                   | `minRate[slot]` floor bounds the damage; `setQuoteSigner` rotates                         |
+| USDC 6-decimal rounding          | Fuzz asserts the exact-sum invariant, so rounding cannot leak value                       |
+| USDC blocklist                   | Pull model leaves funds claimable rather than bricking a settlement                       |
+| `pause` as griefing              | Pausing must never block `claim`                                                          |
+| Admin kill centralisation        | Safe-only, event-logged, mirroring the offchain audit trail from #17                      |
+| Fee-on-transfer / rebasing token | Not applicable to USDC, but the received amount is asserted anyway                        |
+
+---
+
+## Phase 2 — wallet connect and the pay flow
+
+**Add** `wagmi`, `viem`, and a connect kit (RainbowKit or ConnectKit).
+
+**Create**
+
+- `src/lib/chain/{config,client,contract}.ts`
+- `src/lib/quote/sign.ts` — EIP-712 signing, `server-only`
+- `src/app/api/quote/route.ts`
+- `src/components/wallet/{provider,connect-button}.tsx`
+- `src/components/checkout/crypto-flow.tsx`
+- `src/lib/chain/sync.ts` — the log poller
+
+**Change**
+
+- `src/app/checkout/page.tsx` — fiat or crypto
+- `src/app/layout.tsx` — wallet provider
+- `src/lib/config/{server,client}.ts`
+- `src/app/api/cron/hourly/route.ts` — poll logs, settle due rentals, retry failed fiat registrations
+
+**Data model**
+
+```prisma
+enum PaymentMethod { stripe, usdc_base }
+
+// Purchase gains:
+//   paymentMethod PaymentMethod
+//   chainId Int?  rentalId BigInt?  txHash String?
+//   renterAddress String?  contentHash String?
+//   @@unique([chainId, rentalId])
+
+model ChainCursor { chainId Int @id  lastBlock BigInt  updatedAt DateTime }
+model FiatRegistration { purchaseId String @id  status  attempts Int  lastError String? }
+```
+
+`@@unique([chainId, rentalId])` is the crypto equivalent of `stripeSessionId`: it makes log
+replay idempotent **by constraint** rather than by checking first, which is the same reasoning
+the Stripe webhook already uses and the same reason it cannot race.
+
+**Risks**
+
+The quote signer becomes a production secret — environment only, never `.env.example`, and named
+in `scripts/check-client-bundle.mjs` so a leak into the browser bundle fails CI. Reorgs mean a
+confirmation threshold before a rental is shown; Base reorgs are shallow but real. An RPC outage
+must never block a board render — the board reads the database mirror, exactly as it reads cached
+avatars rather than fetching them. `approve` is a second transaction, so offer `rentWithPermit`.
+Wallet libraries are heavy: lazy-load them, and keep the board itself a server component.
+
+---
+
+## Phase 3 — per-slot stats
+
+**Create** `src/lib/stats/{record,read}.ts`, `src/app/api/stats/[purchaseId]/route.ts`,
+`src/components/board/slot-stats.tsx`.
+**Change** `src/components/board/{slot-one,slot-row}.tsx`. Clicks already exist
+(`src/lib/embed/clicks.ts`, `purchase.clicks`).
+
+**Data model** `SlotImpression { purchaseId, hourBucket, count }` and
+`SlotWalletConnect { purchaseId, hourBucket, count }` — hourly buckets, bot-filtered through the
+existing `looksLikeABot`, visitor-hashed the way `Visit` already is.
+
+**Risk — the one that matters in this phase.** The never-fabricate rule applies with full force
+to numbers a buyer is being sold on. An impression is defined as _a board render that included
+this slot, deduped per visitor-window_, and the UI says that rather than implying reach. A wallet
+connect is only attributable when it happens while that slot is live, so it is defined narrowly
+and labelled. No estimates, no rounded-up uniques, no "reach".
+
+---
+
+## Phase 4 — announcements
+
+**Create** `src/lib/social/{telegram,format,announce}.ts`, and a `SocialPost` model whose unique
+key is `(purchaseId, event)` so a retried log poll cannot double-post.
+**Change** the hourly job and the `Rented` log handler.
+
+**Risks.** Announce only **after** moderation clears, never on payment — otherwise the bot
+advertises a scam before a human has looked at it. Double-posting is prevented by a constraint,
+not a check. Platform rate limits reuse the existing GCRA limiter from #18. Credentials live in
+the environment.
+
+---
+
+## Phase 5 — trust badges and the approval queue
+
+**Create** `src/lib/trust/{basescan,lp-lock,store}.ts`, `src/app/admin/approvals/page.tsx`,
+`src/app/api/admin/approve/route.ts`, `src/components/board/trust-badges.tsx`.
+**Change** the existing `/admin` console and the `AdminAction` audit trail, which already has the
+right shape from #17.
+
+**Data model**
+
+```prisma
+model Advertiser  { wallet String @id  status  approvedBy String?  approvedAt DateTime? }
+model SlotContent { purchaseId String @id  name  ticker  tokenAddress  chain
+                    logo Bytes  ctaType  ctaUrl }
+model TrustBadge  { purchaseId String @id  contractVerified Boolean  lpLocked Boolean
+                    lpLockSource String?  auditUrl String?  checkedAt DateTime }
+```
+
+The logo is stored and re-encoded like an `Avatar` — self-hosted, metadata stripped, so the board
+still makes no third-party request. It is also what makes `contentHash` mean anything.
+
+**Risks.** A badge is a claim _TopNow_ is making. "LP locked" is only as good as the locker
+contract checked, so the UI renders **what was checked and when**, never a bare green tick. A
+first-time advertiser pays before approval, so a rejection must refund from escrow via `kill`
+before `startsAt`. Basescan rate-limits and changes its API.
+
+**Regulatory scaffolding lands here** (W9): the per-slot disclaimer, a submission-time check for
+banned categories — securities-like offerings, yield or APY promises, guaranteed returns —
+surfaced in the approval queue rather than auto-rejected, and an admin-configurable geo-block
+list. This is scaffolding for legal advice, not a substitute for it.
+
+---
+
+## Phase 6 — post-MVP
+
+Outbidding on the live slot (≥10%, 15-minute protection, ousted tenant refunded pro-rata to
+`claimable`, queue survives and shifts) — this is where W12 gets solved properly. Then advance
+reservations for launch day, an embeddable leaderboard widget (iframe plus `postMessage` for
+height), takeover animations, and a hall of fame.
+
+Viewer rewards are **non-monetary points and badges only** (W9). Points for check-ins and clicks,
+rate-limited and sybil-resistant through the existing visitor hashing; no payouts and no
+prediction market.
+
+**Risks.** Outbidding is the hardest contract change in the whole plan: griefing by repeated 10%
+bumps, MEV on the takeover transaction, and refund accounting mid-rental. Points invite farming,
+which is why they stay non-monetary.
+
+---
+
+## Cross-cutting
+
+**Testnet only** until explicitly released. Every phase ends green on: `forge test`, `npm test`,
+`npm run test:e2e`, lint, format, typecheck, the price-literal check, the client-bundle scan, and
+gitleaks. One feature per branch, one PR, a summary, then a stop for approval before the next.
+
+Contract discipline, restated because it is the part that cannot be patched after deployment:
+checks-effects-interactions; OpenZeppelin where it is the obvious tool; **no unbounded loops**;
+an event for every state change.
+
+---
+
+## Before phase 1 can start
+
+1. **Confirm W11** — register fiat rentals onchain, or one of the alternatives.
+2. **Allowlist the hosts in phase 0.** Nothing onchain is buildable until then.
+3. **Merge [#31](https://github.com/meemimos/topnow.live/pull/31)**, or say to branch from it.

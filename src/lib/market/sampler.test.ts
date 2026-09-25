@@ -312,7 +312,7 @@ describe("the tick survives a failing refresh", () => {
     const result = await runHourlyTick(new Date());
 
     expect(result.samplesWritten + result.samplesSkipped).toBeGreaterThan(0);
-    expect(result.avatars).toEqual({ considered: 0, resolved: 0, failed: 0 });
+    expect(result.avatars).toEqual({ considered: 0, resolved: 0, failed: 0, deferred: 0 });
     expect(warn).toHaveBeenCalled();
   });
 
@@ -322,6 +322,6 @@ describe("the tick survives a failing refresh", () => {
 
     const result = await runHourlyTick(new Date());
     expect(result.samplesWritten + result.samplesSkipped).toBeGreaterThan(0);
-    expect(result.embeds).toEqual({ considered: 0, resolved: 0, failed: 0 });
+    expect(result.embeds).toEqual({ considered: 0, resolved: 0, failed: 0, deferred: 0 });
   });
 });

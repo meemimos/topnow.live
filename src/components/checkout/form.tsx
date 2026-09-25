@@ -146,6 +146,9 @@ export function CheckoutForm({ onQuote }: { onQuote?: (priced: PricedListing | n
       <fieldset className="mb-4 border-0 p-0">
         <legend className="sr-only">Pick a slot</legend>
         <Step number={1}>PICK A SLOT</Step>
+        {/* Full-width thirds, as the prototype has them. Three small buttons
+            floating at the left read as a filter; three that fill the column
+            read as the choice the step is asking for. */}
         <div className="flex gap-1.5" role="radiogroup" aria-label="Slot">
           {SLOTS.map((value) => (
             <BevelButton
@@ -154,6 +157,7 @@ export function CheckoutForm({ onQuote }: { onQuote?: (priced: PricedListing | n
               aria-checked={slot === value}
               selected={slot === value}
               onClick={() => setSlot(value)}
+              className="flex-1"
             >
               {String(value).padStart(2, "0")}
             </BevelButton>
@@ -165,26 +169,31 @@ export function CheckoutForm({ onQuote }: { onQuote?: (priced: PricedListing | n
         <legend className="sr-only">Pick a duration</legend>
         <Step number={2}>FEED THE METER</Step>
 
-        {/* A slider that can only land on a snap point — never an arbitrary
-            number of hours, which the server also refuses. */}
-        <input
-          type="range"
-          min={0}
-          max={DURATIONS.length - 1}
-          step={1}
-          value={durationIndex}
-          onChange={(event) => setDurationIndex(Number(event.target.value))}
-          className="w-full accent-navy"
-          aria-label="Duration"
-          aria-valuetext={`${duration.hours} hours — ${duration.name}`}
-        />
-        <div className="text-xs mt-1 flex justify-between font-pixel">
-          {DURATIONS.map((d) => (
-            <span key={d.hours} className={cn(d.hours === duration.hours && "font-bold")}>
-              {d.hours}H
-            </span>
-          ))}
-        </div>
+        {/* The track sits in a well, as it does in the prototype: the meter is
+            a physical thing being fed, and a bare range input on paper is the
+            one control on this page that stops looking like the rest of it. */}
+        <Plate variant="inset" className="px-2.5 py-2">
+          {/* A slider that can only land on a snap point — never an arbitrary
+              number of hours, which the server also refuses. */}
+          <input
+            type="range"
+            min={0}
+            max={DURATIONS.length - 1}
+            step={1}
+            value={durationIndex}
+            onChange={(event) => setDurationIndex(Number(event.target.value))}
+            className="w-full accent-navy"
+            aria-label="Duration"
+            aria-valuetext={`${duration.hours} hours — ${duration.name}`}
+          />
+          <div className="text-xs mt-1 flex justify-between font-pixel">
+            {DURATIONS.map((d) => (
+              <span key={d.hours} className={cn(d.hours === duration.hours && "font-bold")}>
+                {d.hours}H
+              </span>
+            ))}
+          </div>
+        </Plate>
         <div className="text-md mt-1.5">
           <span className="font-pixel font-bold">{duration.hours}H</span>{" "}
           <span className="text-ink-soft">{duration.name}</span>

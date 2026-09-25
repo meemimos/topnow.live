@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { CheckoutFlow } from "@/components/checkout/flow";
 import { ServerClockProvider } from "@/components/clock/provider";
 import { Plate } from "@/components/ui/plate";
+import { SiteFooter, SiteHeader } from "@/components/ui/site-chrome";
 import { TitleBar } from "@/components/ui/title-bar";
 import { serverNow } from "@/lib/time/server";
 
@@ -17,10 +18,15 @@ export default function CheckoutPage() {
   return (
     <ServerClockProvider serverNow={now}>
       <main className="mx-auto flex max-w-[1020px] flex-col px-2 pt-2.5 pb-10">
+        {/* No open count: checkout has not read the board, and a number invented
+            for the chrome is still an invented number. */}
+        <SiteHeader />
+
         <Plate className="p-[3px]">
           <TitleBar meta="STEP 1 OF 2">THE METER</TitleBar>
           <CheckoutFlow />
         </Plate>
+        <SiteFooter serverNow={now} />
       </main>
     </ServerClockProvider>
   );

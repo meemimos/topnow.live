@@ -389,7 +389,11 @@ async function scenarioKill() {
   );
 
   const killAt = new Date(t.getTime() + 2 * HOUR);
-  const { killed, promoted } = await killPurchase(live.id, "impersonation", killAt);
+  const { killed, promoted } = await killPurchase(live.id, {
+    reason: "impersonation",
+    actor: "scenarios",
+    now: killAt,
+  });
   step(killAt, `report upheld — @${killed.handle} killed after 2h of a 12h rental`);
   step(killAt, `@${promoted!.handle} promoted in the same transaction — no empty slot`);
 

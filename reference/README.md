@@ -39,3 +39,11 @@ Bevel depth also differs from the prompt: plates in the prototype use **2px** in
 (`inset -2px -2px 0 #7b7b7b, inset 2px 2px 0 #ffffff`, 15 occurrences) while the prompt
 table specifies 3px. 3px is used for **buttons and navy controls** (5 + 4 occurrences).
 Recommendation: `plate` = 2px, `control` = 3px. Flagged in issue #4.
+
+## Fidelity captures (#5)
+
+`fidelity/` holds the side-by-side captures of `../TopNow.html` and the built app at 360, 768 and
+1280, and `fidelity/DEVIATIONS.md` explains every difference between them.
+
+Regenerate with `npm run fidelity` — see `scripts/fidelity.ts`. **It truncates the database it runs
+against**, like `npm run scenarios`, so point it at a scratch one.
