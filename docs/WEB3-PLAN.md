@@ -83,11 +83,24 @@ requests** by design (#19, #20) and an embedded player would undo that in one li
 The rental is onchain. The content lives in the database keyed by rental id, with a
 `contentHash` stored onchain so the content that was approved is the content that is provable.
 
-### W6. Moderation — pre-approval for newcomers
+### W6. Moderation — before the quote is signed
 
 First-time advertisers are pre-approved by hand (@meemimos staffs it); approved advertisers skip
-the queue on later rentals. A rejected rental is **fully refunded** from escrow. Admin kill works
-onchain and refunds unused time.
+the queue on later rentals.
+
+**Approval happens before a quote is signed, not after payment.** The server issues no signed
+quote for unapproved content, so an unapproved rental cannot be paid for at all. This removes the
+refund-on-reject path entirely: there is nothing to refund, because nothing was taken. It also
+removes a whole class of awkward state — a paid rental sitting in escrow waiting on a human.
+
+One consequence worth stating plainly: the approval gate is a **dependency of the crypto pay
+flow**, not a later addition to it. Phase 2 therefore ships the gate — the quote endpoint refuses
+unapproved advertisers and unapproved content — and phase 5 ships the queue UI and the badges.
+Between the two, approval is a hand-flipped database column, which is fine for a surface with one
+operator.
+
+Admin kill still exists and still refunds unused time. That is for a listing which was approved
+and later turned out to be something else.
 
 Automated badges: contract verified (Basescan API), LP lock status. Manual: audit link.
 
@@ -134,7 +147,7 @@ The existing 24-hour wait cap is one comparison: `freeAt - now <= 24h`.
 This is the closest fit between the architecture that exists and a contract, which is why it is
 worth keeping the queue in the MVP rather than starting from an auction.
 
-### W11. Fiat rentals are registered onchain — **NEEDS CONFIRMATION**
+### W11. Fiat rentals are registered onchain — **CONFIRMED (i)**
 
 Fiat and crypto compete for the same three slots, but only the contract knows `freeAt`. A Stripe
 purchase is invisible to it, so the two paths would double-book.
@@ -145,7 +158,9 @@ purchase is invisible to it, so the two paths would double-book.
 | (ii) Separate boards                                | No coupling, but "the leaderboard" becomes two leaderboards, which is a worse product.                                                                                                                                                                                          |
 | (iii) Drop Stripe                                   | Cleanest contract; loses the fiat buyers W7 keeps.                                                                                                                                                                                                                              |
 
-Planned as (i). **Confirm before phase 1 starts** — it shapes the contract interface.
+Confirmed as (i) by @meemimos. The hot key that calls `registerFiat` is scoped by role rather
+than by ownership — see W13 — so a compromised web server can schedule a fiat rental and nothing
+else. It cannot move funds, change the signer, or change a price floor.
 
 ### W12. A kill leaves a hole in the schedule
 
@@ -157,21 +172,106 @@ to know that is exactly the complexity the O(1) design avoids.
 The MVP takes the hole and says so in the UI. Phase 2 solves it properly alongside outbidding,
 which has the identical "tenant left early" shape.
 
+### W13. Roles, not ownership
+
+`AccessControl` rather than `Ownable2Step`. Three roles, each holding the smallest authority that
+lets it do its job:
+
+| Role                 | Holder                    | May                                                                             |
+| -------------------- | ------------------------- | ------------------------------------------------------------------------------- |
+| `DEFAULT_ADMIN_ROLE` | Safe multisig             | `withdraw`, `setQuoteSigner`, `setMinRate`, `setPaused`, grant and revoke roles |
+| `REGISTRAR_ROLE`     | hot key on the web server | `registerFiat` — **nothing else**                                               |
+| `MODERATOR_ROLE`     | hot key                   | `kill`, and **only before `startsAt`**                                          |
+
+The point of the split is blast radius. The registrar key lives on a web server that talks to
+Stripe, so it is the key most likely to leak; scoped this way, leaking it costs a spurious
+schedule entry, not the escrow. The moderator key can stop something before it reaches the board
+but cannot cut short a rental someone is already paying for and watching — that is a Safe
+decision, taken deliberately and slowly.
+
+Funds and configuration stay with the Safe, always.
+
+### W14. `maxStartsAt` on the quote
+
+The quote carries a `maxStartsAt`, and `rent` reverts if the computed `startsAt` exceeds it.
+
+Without it, a buyer signs for a slot that starts in twenty minutes and — if the queue grows
+between the quote and the transaction landing — pays the same money for one that starts in
+nineteen hours. The wait is the product. A buyer must not be able to lose it to a race, any more
+than they can be re-priced by one (W4).
+
+### W15. Cancelling before the start costs 10%
+
+`cancel` refunds 90% to `claimable` and sends 10% to `platformBalance`.
+
+A free cancel makes the queue a free option: buy up the next six hours, cancel the moment a rival
+tries to book, and the slot is yours whenever you want it at no cost. The fee is what makes
+queue-stuffing cost something. It is charged only on a rental that has **not started** — a rental
+under way cannot be cancelled by its renter at all.
+
+Fuzz asserts `refund + fee == paid` exactly, so the fee cannot create or destroy dust.
+
+### W16. A fiat rental that cannot be scheduled is refunded
+
+`registerFiat` can revert legitimately: the cap was reached, or the slot was taken between the
+Stripe session starting and the payment clearing. When it does, the webhook **refunds the Stripe
+payment and records the reason** on the purchase.
+
+This is the one place the existing, so-far-unused Stripe refund path earns its keep — and the
+existing `WebhookOutcome` already has a `refunded` variant for exactly this shape, because the
+queue cap could already do it. The registration is retried a bounded number of times first
+(transient RPC failure is not a capacity failure), and only a genuine revert triggers the refund.
+
+### W17. The contract is immutable
+
+No proxy, no upgrade path, no admin-swappable implementation. An upgradeable escrow is an escrow
+whose owner can rewrite the rules over funds other people put in, and the whole argument for
+putting the money onchain is that they do not have to trust that.
+
+Migration is therefore a redeploy, and phase 6 documents it as a procedure rather than
+discovering it under pressure:
+
+1. Deploy v2; grant it no authority over v1.
+2. `setPaused(true)` on v1 — new rentals stop, `claim` keeps working (pausing must never block a
+   refund).
+3. Let v1's remaining rentals run out and settle. The longest possible tail is 24 hours plus the
+   queue cap, so 48 hours bounds it.
+4. Point the app and the indexer at v2.
+5. `withdraw` the v1 platform balance once every rental has settled.
+
+Slot scheduling state (`freeAt`) does not migrate: v2 starts empty, which is correct, because v1
+is still serving the rentals that produced it.
+
+### W18. Mainnet is gated on legal advice and an external audit
+
+Testnet until both are done. Not one or the other — the contract holds other people's money, and
+the product takes payment to promote financial products in a jurisdiction that regulates exactly
+that.
+
 ---
 
 ## Phase 0 — foundations
 
 **Blocked on the network policy.** The container's proxy currently denies every host this needs:
 
-- `foundry.paradigm.xyz` and `github.com/foundry-rs/*` — the installer, and `forge install` for OpenZeppelin
+- `foundry.paradigm.xyz` and the GitHub release host — the `forge` binary itself
 - `sepolia.base.org`, `*.g.alchemy.com` — RPC
 - `api-sepolia.basescan.org` — verification and the trust badges
 
-Nothing onchain can be built until these are allowlisted.
+Nothing onchain can be built until these are allowlisted. Writing `SlotMarket.sol` without being
+able to run `forge test` would mean shipping untested escrow code, which is worse than shipping
+none.
+
+**The Solidity libraries do not need an allowlist.** `@openzeppelin/contracts` (5.6.1),
+`forge-std` (1.1.2) and `solc` (0.8.37) are all on npm, which already works here, so they come in
+as dev dependencies and `remappings.txt` points at `node_modules/` rather than at `lib/`. That
+drops `github.com/foundry-rs/*` off the list, pins the libraries in the lockfile alongside
+everything else, and puts them in range of the same dependency tooling as the rest of the repo.
 
 **Create**
 
-- `contracts/` as a Foundry root: `foundry.toml`, `remappings.txt`, `lib/`, `contracts/.gitignore`
+- `contracts/` as a Foundry root: `foundry.toml`, `remappings.txt`, `contracts/.gitignore` — no
+  `lib/` and no submodules; libraries resolve through `node_modules/`
 - `.github/workflows/contracts.yml` — `forge fmt --check`, `forge build`, `forge test -vvv`, `forge coverage`
 
 **Change**
@@ -224,6 +324,7 @@ struct Quote {             // EIP-712, signed by QUOTE_SIGNER
     uint8   slot;
     uint16  durationH;
     uint128 rateHr;
+    uint64  maxStartsAt;   // W14 — revert if the queue grew past this
     bytes32 contentHash;
     uint256 nonce;
     uint64  expiry;
@@ -233,28 +334,35 @@ function rent(Quote calldata q, bytes calldata sig) external returns (uint256 id
 function rentWithPermit(Quote calldata q, bytes calldata sig, Permit calldata p)
     external returns (uint256 id);
 
-// Owner-only, zero payment. See W11.
+// REGISTRAR_ROLE, zero payment. See W11, W13.
 function registerFiat(address renter, uint8 slot, uint16 durationH, bytes32 contentHash)
     external returns (uint256 id);
 
 function settle(uint256 id) external;                    // permissionless, after endsAt
 function settleMany(uint256[] calldata ids) external;    // length-capped
-function cancel(uint256 id) external;                    // renter, only before startsAt
-function kill(uint256 id, string calldata reason) external;   // owner (Safe)
-function claim() external;                               // pull refunds
-function withdraw(address to, uint128 amount) external;  // owner (Safe)
+function cancel(uint256 id) external;                    // renter, before startsAt, 10% fee (W15)
+function kill(uint256 id, string calldata reason) external;     // MODERATOR_ROLE, before startsAt
+function killLive(uint256 id, string calldata reason) external; // DEFAULT_ADMIN_ROLE (Safe)
+function claim() external;                               // pull refunds — never pausable
+function withdraw(address to, uint128 amount) external;  // DEFAULT_ADMIN_ROLE
 
-function setQuoteSigner(address next) external;
-function setMinRate(uint8 slot, uint128 rateHr) external;
-function setPaused(bool paused) external;
+function setQuoteSigner(address next) external;           // DEFAULT_ADMIN_ROLE
+function setMinRate(uint8 slot, uint128 rateHr) external; // DEFAULT_ADMIN_ROLE
+function setPaused(bool paused) external;                 // DEFAULT_ADMIN_ROLE
 
 function freeAt(uint8 slot) external view returns (uint64);
 function rentalOf(uint256 id) external view returns (Rental memory);
 function earnedOf(uint256 id, uint64 at) external view returns (uint128);
 ```
 
-Every state change emits: `Rented`, `Settled`, `Killed`, `Cancelled`, `Claimed`, `Withdrawn`,
-`QuoteSignerChanged`, `MinRateChanged`, `PausedSet`.
+Every state change emits: `Rented`, `FiatRegistered`, `Settled`, `Killed`, `Cancelled`,
+`Claimed`, `Withdrawn`, `QuoteSignerChanged`, `MinRateChanged`, `PausedSet`. Role changes emit
+`AccessControl`'s own `RoleGranted` / `RoleRevoked`.
+
+W13 splits kill in two. `kill` is for a rental that has not started — a moderator hot key may call
+it, and it refunds in full because nothing was delivered. `killLive` cuts short a rental already
+on the board, refunds the unused portion, and is Safe-only: taking away something a buyer is
+watching in real time should cost a multisig round trip.
 
 ### Accounting
 
@@ -269,9 +377,11 @@ Settlement is O(1) per rental: earned moves to `platformBalance`, unearned moves
 would force an unbounded loop, and it is why settlement is per-rental and permissionless. The
 hourly job settles what is due in capped batches; anyone else may too.
 
-`cancel` is deliberately limited to a rental that has **not yet started**. A renter cancelling a
-live rental would be a self-service refund of time the board has already given them, and it would
-make the board unstable for everyone downstream.
+`cancel` is deliberately limited to a rental that has **not yet started**, and costs 10% (W15). A
+renter cancelling a live rental would be a self-service refund of time the board has already given
+them, and would make the board unstable for everyone downstream. A _free_ cancel before the start
+would make the queue a free option — buy the next six hours, cancel the moment a rival tries to
+book — so the fee is what gives queue-stuffing a price.
 
 ### What the contract enforces rather than trusts
 
@@ -282,34 +392,39 @@ The server proposes; the contract checks. A lying or compromised server cannot g
 - `rateHr >= minRate[slot]` — the floor from W4
 - `durationH` is one of the five snap points
 - `startsAt >= freeAt[slot]` — non-overlap, enforced onchain even though scheduling is offchain
+- `startsAt <= q.maxStartsAt` — the buyer's own ceiling on the wait (W14)
 - `freeAt - now <= 24h` — the existing wait cap
 - not paused
 
 ### Libraries and discipline
 
-OpenZeppelin `Ownable2Step`, `Pausable`, `ReentrancyGuard`, `SafeERC20`, `EIP712`, `ECDSA`,
-`Nonces`. Checks-effects-interactions throughout; `claim()` zeroes the balance before transferring.
+OpenZeppelin `AccessControl`, `Pausable`, `ReentrancyGuard`, `SafeERC20`, `EIP712`, `ECDSA`,
+`Nonces`, from npm (see phase 0). Checks-effects-interactions throughout; `claim()` zeroes the
+balance before transferring. The contract is immutable — no proxy, no initialiser (W17).
 
 ### Tests
 
-Unit tests per function. Fuzz over `(rateHr, durationH, elapsed)` asserting
-`earned + refund == paid` exactly — no dust created or destroyed — and that `earned` is monotonic
-in time. Invariant tests asserting
-`USDC.balanceOf(market) >= platformBalance + Σ claimable + Σ paid(unsettled)` and that no two
-rentals on a slot ever overlap.
+Unit tests per function, including one per role boundary: every privileged function called by
+every wrong role, and required to revert. Fuzz over `(rateHr, durationH, elapsed)` asserting
+`earned + refund == paid` exactly — no dust created or destroyed — that `earned` is monotonic in
+time, and that `refund + fee == paid` on a cancel. Invariant tests asserting
+`USDC.balanceOf(market) >= platformBalance + Σ claimable + Σ paid(unsettled)`, that no two rentals
+on a slot ever overlap, and that `claim` still succeeds while paused.
 
 ### Risks
 
-| Risk                             | Mitigation                                                                                |
-| -------------------------------- | ----------------------------------------------------------------------------------------- |
-| Reentrancy                       | CEI, `ReentrancyGuard`, and pull-based refunds — there is no push to an arbitrary address |
-| Signature replay                 | Nonce, expiry, and `chainId` in the EIP-712 domain                                        |
-| Hot signer key                   | `minRate[slot]` floor bounds the damage; `setQuoteSigner` rotates                         |
-| USDC 6-decimal rounding          | Fuzz asserts the exact-sum invariant, so rounding cannot leak value                       |
-| USDC blocklist                   | Pull model leaves funds claimable rather than bricking a settlement                       |
-| `pause` as griefing              | Pausing must never block `claim`                                                          |
-| Admin kill centralisation        | Safe-only, event-logged, mirroring the offchain audit trail from #17                      |
-| Fee-on-transfer / rebasing token | Not applicable to USDC, but the received amount is asserted anyway                        |
+| Risk                             | Mitigation                                                                                                                                         |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reentrancy                       | CEI, `ReentrancyGuard`, and pull-based refunds — there is no push to an arbitrary address                                                          |
+| Signature replay                 | Nonce, expiry, and `chainId` in the EIP-712 domain                                                                                                 |
+| Hot signer key                   | `minRate[slot]` floor bounds the damage; `setQuoteSigner` rotates                                                                                  |
+| USDC 6-decimal rounding          | Fuzz asserts the exact-sum invariant, so rounding cannot leak value                                                                                |
+| USDC blocklist                   | Pull model leaves funds claimable rather than bricking a settlement                                                                                |
+| `pause` as griefing              | Pausing must never block `claim`                                                                                                                   |
+| Admin kill centralisation        | Cutting short a _live_ rental is Safe-only; a moderator key can only stop one that has not started. Both event-logged, mirroring #17's audit trail |
+| Registrar key compromise         | Scoped to `registerFiat`; cannot move funds or change config (W13)                                                                                 |
+| Buyer loses slot time to a race  | `maxStartsAt` reverts rather than delivering a worse product at the same price (W14)                                                               |
+| Fee-on-transfer / rebasing token | Not applicable to USDC, but the received amount is asserted anyway                                                                                 |
 
 ---
 
@@ -321,7 +436,9 @@ rentals on a slot ever overlap.
 
 - `src/lib/chain/{config,client,contract}.ts`
 - `src/lib/quote/sign.ts` — EIP-712 signing, `server-only`
-- `src/app/api/quote/route.ts`
+- `src/app/api/quote/route.ts` — **refuses to sign for an unapproved advertiser or unapproved
+  content** (W6); this gate ships here, the UI for it ships in phase 5
+- `src/lib/chain/register-fiat.ts` — the registrar call, its bounded retry, and the refund (W16)
 - `src/components/wallet/{provider,connect-button}.tsx`
 - `src/components/checkout/crypto-flow.tsx`
 - `src/lib/chain/sync.ts` — the log poller
@@ -331,7 +448,10 @@ rentals on a slot ever overlap.
 - `src/app/checkout/page.tsx` — fiat or crypto
 - `src/app/layout.tsx` — wallet provider
 - `src/lib/config/{server,client}.ts`
-- `src/app/api/cron/hourly/route.ts` — poll logs, settle due rentals, retry failed fiat registrations
+- `src/app/api/cron/hourly/route.ts` — poll logs, settle due rentals, retry pending fiat registrations
+- `src/lib/payments/webhook.ts` — register onchain, and refund the Stripe payment when
+  registration genuinely cannot be scheduled (W16). The existing `WebhookOutcome.refunded`
+  variant already has the right shape
 
 **Data model**
 
@@ -345,8 +465,19 @@ enum PaymentMethod { stripe, usdc_base }
 //   @@unique([chainId, rentalId])
 
 model ChainCursor { chainId Int @id  lastBlock BigInt  updatedAt DateTime }
-model FiatRegistration { purchaseId String @id  status  attempts Int  lastError String? }
+
+// A fiat purchase awaiting its onchain schedule entry. `outcome` records why a
+// registration was abandoned, which is what the refund reason is written from (W16).
+model FiatRegistration {
+  purchaseId String @id  status  attempts Int
+  lastError String?  outcome String?  refundedAt DateTime?
+}
+
+model Advertiser { wallet String @id  status  approvedBy String?  approvedAt DateTime? }
 ```
+
+`Advertiser` lands here rather than in phase 5 because W6 makes approval a precondition of
+signing a quote. Phase 5 adds the queue that operates on it.
 
 `@@unique([chainId, rentalId])` is the crypto equivalent of `stripeSessionId`: it makes log
 replay idempotent **by constraint** rather than by checking first, which is the same reasoning
@@ -397,6 +528,8 @@ the environment.
 
 ## Phase 5 — trust badges and the approval queue
 
+The gate itself shipped in phase 2 (W6). This phase gives it a surface and adds the badges.
+
 **Create** `src/lib/trust/{basescan,lp-lock,store}.ts`, `src/app/admin/approvals/page.tsx`,
 `src/app/api/admin/approve/route.ts`, `src/components/board/trust-badges.tsx`.
 **Change** the existing `/admin` console and the `AdminAction` audit trail, which already has the
@@ -405,9 +538,9 @@ right shape from #17.
 **Data model**
 
 ```prisma
-model Advertiser  { wallet String @id  status  approvedBy String?  approvedAt DateTime? }
+// Advertiser arrives in phase 2 — the quote gate needs it. Phase 5 adds:
 model SlotContent { purchaseId String @id  name  ticker  tokenAddress  chain
-                    logo Bytes  ctaType  ctaUrl }
+                    logo Bytes  ctaType  ctaUrl  approvedAt DateTime? }
 model TrustBadge  { purchaseId String @id  contractVerified Boolean  lpLocked Boolean
                     lpLockSource String?  auditUrl String?  checkedAt DateTime }
 ```
@@ -417,8 +550,9 @@ still makes no third-party request. It is also what makes `contentHash` mean any
 
 **Risks.** A badge is a claim _TopNow_ is making. "LP locked" is only as good as the locker
 contract checked, so the UI renders **what was checked and when**, never a bare green tick. A
-first-time advertiser pays before approval, so a rejection must refund from escrow via `kill`
-before `startsAt`. Basescan rate-limits and changes its API.
+Basescan rate-limits and changes its API. Approval is now a gate on revenue: if the queue is not
+staffed, nobody new can buy — the right failure direction, but it has to be visible, so the
+console shows how long the oldest pending submission has waited.
 
 **Regulatory scaffolding lands here** (W9): the per-slot disclaimer, a submission-time check for
 banned categories — securities-like offerings, yield or APY promises, guaranteed returns —
@@ -446,7 +580,7 @@ which is why they stay non-monetary.
 
 ## Cross-cutting
 
-**Testnet only** until explicitly released. Every phase ends green on: `forge test`, `npm test`,
+**Testnet only** until legal advice and an external audit are both done (W18). Every phase ends green on: `forge test`, `npm test`,
 `npm run test:e2e`, lint, format, typecheck, the price-literal check, the client-bundle scan, and
 gitleaks. One feature per branch, one PR, a summary, then a stop for approval before the next.
 
@@ -458,6 +592,11 @@ an event for every state change.
 
 ## Before phase 1 can start
 
-1. **Confirm W11** — register fiat rentals onchain, or one of the alternatives.
-2. **Allowlist the hosts in phase 0.** Nothing onchain is buildable until then.
-3. **Merge [#31](https://github.com/meemimos/topnow.live/pull/31)**, or say to branch from it.
+W11 is confirmed and this branch is cut from
+[#31](https://github.com/meemimos/topnow.live/pull/31). One thing remains:
+
+**Allowlist `foundry.paradigm.xyz` and the GitHub release host.** Without `forge`, phase 1 is
+untestable escrow code, and untested escrow code is not worth writing. The RPC and Basescan hosts
+are needed from phase 2 and phase 5 respectively, so they can follow.
+
+The Solidity libraries no longer need an allowlist: they come from npm.
