@@ -222,6 +222,41 @@ existing `WebhookOutcome` already has a `refunded` variant for exactly this shap
 queue cap could already do it. The registration is retried a bounded number of times first
 (transient RPC failure is not a capacity failure), and only a genuine revert triggers the refund.
 
+### W19. x402 signs `transferWithAuthorization`, and we want `receiveWithAuthorization` — **OPEN**
+
+Checked against the spec rather than assumed, and the two do not line up.
+
+The x402 exact-EVM scheme has the client sign an EIP-712 **`TransferWithAuthorization`** struct
+with `to` set to `payTo`, and the facilitator settles by calling `transferWithAuthorization`
+directly on the token. The spec is explicit that `to` is "the intended payment recipient — not a
+contract intermediary", precisely so a facilitator cannot redirect funds.
+
+Our design wants the opposite shape, for a good reason. If `payTo` is `SlotMarket` and the
+authorization is a _transfer_, **anyone may submit it to USDC on its own**: the money lands in the
+contract, no rental is created, the nonce is spent, and the funds are stranded. Paying and
+scheduling have to be one atomic act, which is exactly what `receiveWithAuthorization` gives —
+only `to` may call it, so the pull and the rental happen in the same call or not at all.
+
+So the instinct behind the phase 1 change is right, and it is the stock x402 flow that is unsafe
+_for this particular use_, because x402 assumes `payTo` is a recipient rather than a contract that
+must do something atomically with the money.
+
+Three ways out, and W17 means the choice cannot be deferred — an immutable contract gets one shot
+at having both:
+
+|                                                                                                                                               | Interoperability                                               | Safety                                                                                                                |
+| --------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| **(a) Spec-compliant only** — `transferWithAuthorization`, contract submits it to USDC itself then creates the rental in the same transaction | Any stock x402 client works                                    | A third party can front-run by submitting the auth to USDC directly; needs an orphan-recovery path for stranded funds |
+| **(b) Receive-only** — `receiveWithAuthorization`, as the phase 1 change asks                                                                 | Stock clients cannot pay; we publish a small client of our own | Atomic by construction. No stranding, no front-run, no recovery path to get wrong                                     |
+| **(c) Both** — `rentWithAuthorization` (receive) and `rentWithTransferAuthorization` (transfer, with recovery)                                | Full                                                           | Two payment paths to test and audit, and the weaker one still exists                                                  |
+
+**Recommendation: (c), decided now.** The extra surface is real, but it is the only option that does
+not have to be regretted later, and the agent audience is the whole point of phase 5.5. If the
+answer is (b), the phase 5.5 test plan changes — a stock SDK will not be able to pay, so the e2e
+agent client becomes ours.
+
+This is the one thing in phase 5.5 that needs an answer before phase 1 is written.
+
 ### W17. The contract is immutable
 
 No proxy, no upgrade path, no admin-swappable implementation. An upgradeable escrow is an escrow
@@ -338,6 +373,20 @@ function rentWithPermit(Quote calldata q, bytes calldata sig, Permit calldata p)
 function registerFiat(address renter, uint8 slot, uint16 durationH, bytes32 contentHash)
     external returns (uint256 id);
 
+// Agent booking over x402 (phase 5.5). authNonce == keccak256(abi.encode(q)) binds one
+// authorization to exactly one quote. Which of these two exists is W19.
+function rentWithAuthorization(
+    Quote calldata q, bytes calldata quoteSig,
+    uint256 validAfter, uint256 validBefore, bytes32 authNonce,
+    uint8 v, bytes32 r, bytes32 s
+) external returns (uint256 id);                         // USDC.receiveWithAuthorization
+
+function rentWithTransferAuthorization(
+    Quote calldata q, bytes calldata quoteSig,
+    uint256 validAfter, uint256 validBefore, bytes32 authNonce,
+    uint8 v, bytes32 r, bytes32 s
+) external returns (uint256 id);                         // USDC.transferWithAuthorization
+
 function settle(uint256 id) external;                    // permissionless, after endsAt
 function settleMany(uint256[] calldata ids) external;    // length-capped
 function cancel(uint256 id) external;                    // renter, before startsAt, 10% fee (W15)
@@ -393,6 +442,9 @@ The server proposes; the contract checks. A lying or compromised server cannot g
 - `durationH` is one of the five snap points
 - `startsAt >= freeAt[slot]` — non-overlap, enforced onchain even though scheduling is offchain
 - `startsAt <= q.maxStartsAt` — the buyer's own ceiling on the wait (W14)
+- on the authorization entry points, `authNonce == keccak256(abi.encode(q))` — a payment
+  authorization is bound to exactly one quote, so it cannot be replayed against a cheaper or
+  later one, and `value` must equal `rateHr * durationH`
 - `freeAt - now <= 24h` — the existing wait cap
 - not paused
 
@@ -561,6 +613,123 @@ list. This is scaffolding for legal advice, not a substitute for it.
 
 ---
 
+## Phase 5.5 — x402 agent booking
+
+An AI agent discovers the price and books a slot over plain HTTP, paying USDC on Base, with no
+checkout UI anywhere in the loop. Depends on phases 1, 2 and 5 — approval gates it (W6), so it
+cannot ship before the thing that approves.
+
+### Field names are taken from the spec, not from memory
+
+Checked 2026-09-25 against
+[the v2 specification](https://github.com/coinbase/x402/blob/main/specs/x402-specification-v2.md),
+[the HTTP transport](https://github.com/coinbase/x402/blob/main/specs/transports-v1/http.md) and
+[the exact-EVM scheme](https://github.com/coinbase/x402/blob/main/specs/schemes/exact/scheme_exact_evm.md).
+Four things differ from what a reasonable person would guess, and three of them would have been
+wrong:
+
+| Guess                      | Actual                                                                                                                   |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `maxAmountRequired`        | **`amount`** in v2 (`maxAmountRequired` was v1)                                                                          |
+| `network: "base-sepolia"`  | **CAIP-2**: `eip155:84532`                                                                                               |
+| `resource` is a URL string | an **object**: `url`, `description`, `mimeType`                                                                          |
+| put our quote in `extra`   | `extra` is **reserved by the exact scheme** for `name`, `version`, `assetTransferMethod` — ours goes in **`extensions`** |
+
+`x402Version: 2` is required in every message. Headers are `X-PAYMENT` and `X-PAYMENT-RESPONSE`,
+each carrying base64-encoded JSON.
+
+### Flow
+
+1. **`GET /api/x402/slots`** — free. Slots, `freeAt`, and the current ask. The price comes from the
+   same curve the board uses; there is no separate agent price, and nothing here is fabricated.
+
+2. **`POST /api/x402/rent`** `{slot, durationH, contentId}` with no payment → **402** carrying
+   `accepts[0]` with `scheme: "exact"`, `network: "eip155:84532"`, `amount`, `asset` (USDC),
+   `payTo` (the `SlotMarket` address), `maxTimeoutSeconds`, and
+   `extra: { name, version, assetTransferMethod: "eip3009" }` — the token's own EIP-712 domain,
+   which the spec requires. The signed `Quote` and `quoteSig` ride in **`extensions`**, namespaced,
+   because `extra` is not ours to put things in. The quote's `expiry` is set at or beyond
+   `maxTimeoutSeconds`, so an agent that uses the whole window still has a valid quote.
+
+3. The agent signs an **EIP-3009** authorization and retries with `X-PAYMENT`.
+
+4. The server verifies the signature, the amount and the binding, then submits the rental. **TopNow
+   is its own facilitator and pays the gas.** It waits for the confirmation threshold from phase 2,
+   then answers **200** with `rentalId`, `startsAt`, `endsAt` and `txHash`, and a
+   `X-PAYMENT-RESPONSE` header carrying the base64 `SettlementResponse`.
+
+Which authorization the agent signs, and therefore whether a stock x402 client can pay at all, is
+**W19** — open, and blocking phase 1.
+
+### Gating
+
+The payer wallet must be an approved `Advertiser`, and `contentId` must resolve to approved content
+whose hash equals the `contentHash` in the quote. Otherwise **403**, with a link to human
+onboarding. **Agents never bypass moderation** — the quote is not signed, so there is nothing to
+pay with, which is the same gate the web flow uses rather than a second one written for agents.
+
+### Files
+
+**Create** `src/lib/x402/{requirements,verify,settle,version}.ts`,
+`src/app/api/x402/slots/route.ts`, `src/app/api/x402/rent/route.ts`,
+`contracts/test/RentWithAuthorization.t.sol`, `e2e/x402-agent.spec.ts`.
+**Change** `src/lib/config/server.ts` (relayer key, confirmation threshold),
+`src/lib/limit/limiter.ts` (an `x402` bucket).
+
+### Data
+
+`Purchase.paymentMethod` gains `usdc_base_x402`.
+
+```prisma
+model X402Payment {
+  authNonce  String @unique   // keccak256(abi.encode(quote)) — one auth, one quote
+  purchaseId String?
+  payer      String
+  status     String
+  createdAt  DateTime @default(now())
+}
+```
+
+`@@unique` on `authNonce` is what makes a replayed `X-PAYMENT` idempotent **by constraint** rather
+than by checking first — the same reasoning as `stripeSessionId` and `(chainId, rentalId)`, and the
+same reason it cannot race.
+
+### Risks
+
+**Gas griefing.** The relayer pays, so a rejected payment still costs us. Rate-limit per wallet and
+per IP through the existing GCRA limiter (#18), and verify the signature, the binding and the
+payer's balance _before_ submitting anything.
+
+**Hot relayer key.** It holds no roles (W13) — `rentWithAuthorization` is permissionless because
+the authority comes from the renter's own signature, not from the submitter. Keep it minimally
+funded and alert on a low balance. A stolen relayer key buys gas, nothing else.
+
+**Quote and authorization disagreeing.** Bound in the contract by
+`authNonce == keccak256(abi.encode(q))`, so an authorization cannot be replayed against a different
+quote.
+
+**Spec drift.** x402 is young and has already moved once — v1 to v2 renamed fields this plan would
+otherwise have got wrong, and a second repository (`x402-foundation/x402`) now mirrors it. Pin the
+version in `src/lib/x402/version.ts`, keep every spec-shaped type inside `src/lib/x402/`, and let
+nothing else in the app know the protocol exists.
+
+**Regulatory.** Identical to the web flow: disclaimer, banned-category check, geo-block (W9). An
+agent is not a different legal category of buyer.
+
+### Tests
+
+Contract: unit and fuzz for the authorization entry point, including a replayed nonce, a mismatched
+quote, an expired `validBefore` and a wrong `value`. End to end: a scripted agent client driving
+the full 402 → sign → retry → 200 round trip against Base Sepolia. Whether that client is the
+official SDK or ours is W19.
+
+### Later
+
+A free content-submission endpoint for agents (still human-approved), and listing in x402
+discovery.
+
+---
+
 ## Phase 6 — post-MVP
 
 Outbidding on the live slot (≥10%, 15-minute protection, ousted tenant refunded pro-rata to
@@ -594,6 +763,9 @@ an event for every state change.
 
 W11 is confirmed and this branch is cut from
 [#31](https://github.com/meemimos/topnow.live/pull/31). One thing remains:
+
+**Answer W19** — whether the contract accepts a receive authorization, a transfer authorization,
+or both. It changes the phase 1 interface, and W17 means there is no second chance at it.
 
 **Allowlist `foundry.paradigm.xyz` and the GitHub release host.** Without `forge`, phase 1 is
 untestable escrow code, and untested escrow code is not worth writing. The RPC and Basescan hosts
