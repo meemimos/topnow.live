@@ -177,11 +177,12 @@ which has the identical "tenant left early" shape.
 `AccessControl` rather than `Ownable2Step`. Three roles, each holding the smallest authority that
 lets it do its job:
 
-| Role                 | Holder                    | May                                                                             |
-| -------------------- | ------------------------- | ------------------------------------------------------------------------------- |
-| `DEFAULT_ADMIN_ROLE` | Safe multisig             | `withdraw`, `setQuoteSigner`, `setMinRate`, `setPaused`, grant and revoke roles |
-| `REGISTRAR_ROLE`     | hot key on the web server | `registerFiat` — **nothing else**                                               |
-| `MODERATOR_ROLE`     | hot key                   | `kill`, and **only before `startsAt`**                                          |
+| Role                 | Holder                    | May                                                                                       |
+| -------------------- | ------------------------- | ----------------------------------------------------------------------------------------- |
+| `DEFAULT_ADMIN_ROLE` | Safe multisig             | `withdraw`, `setQuoteSigner`, `setMinRate`, `unpause`, `killLive`, grant and revoke roles |
+| `REGISTRAR_ROLE`     | hot key on the web server | `registerFiat` — **nothing else**                                                         |
+| `MODERATOR_ROLE`     | hot key                   | `kill`, and **only before `startsAt`**                                                    |
+| `PAUSER_ROLE`        | hot key                   | `pause` — **and not `unpause`**                                                           |
 
 The point of the split is blast radius. The registrar key lives on a web server that talks to
 Stripe, so it is the key most likely to leak; scoped this way, leaking it costs a spurious
@@ -191,9 +192,14 @@ decision, taken deliberately and slowly.
 
 Funds and configuration stay with the Safe, always.
 
+`PAUSER_ROLE` was added on 2026-09-25 at @meemimos's decision. Pausing through the Safe alone would
+make an emergency stop take as long as gathering signers. The asymmetry is the point: a hot key may
+_stop_ new rentals instantly, but only the Safe may start them again, so a stolen pauser key can
+halt the market and do nothing else — it cannot move funds, and `claim` is never pausable.
+
 ### W14. `maxStartsAt` on the quote
 
-The quote carries a `maxStartsAt`, and `rent` reverts if the computed `startsAt` exceeds it.
+The quote carries a `maxStartsAt`, and `rentWithAuthorization` reverts if the computed `startsAt` exceeds it.
 
 Without it, a buyer signs for a slot that starts in twenty minutes and — if the queue grows
 between the quote and the transaction landing — pays the same money for one that starts in
@@ -222,40 +228,72 @@ existing `WebhookOutcome` already has a `refunded` variant for exactly this shap
 queue cap could already do it. The registration is retried a bounded number of times first
 (transient RPC failure is not a capacity failure), and only a genuine revert triggers the refund.
 
-### W19. x402 signs `transferWithAuthorization`, and we want `receiveWithAuthorization` — **OPEN**
+### W19. One payment primitive: `receiveWithAuthorization` — **RESOLVED**
 
-Checked against the spec rather than assumed, and the two do not line up.
+Chosen by @meemimos, 2026-09-25. Every rental — web and agent alike — is paid by an EIP-3009
+**`ReceiveWithAuthorization`** signed by the buyer and submitted by TopNow's relayer. `rent`,
+`rentWithPermit` and `rentWithTransferAuthorization` are gone from the interface.
 
-The x402 exact-EVM scheme has the client sign an EIP-712 **`TransferWithAuthorization`** struct
-with `to` set to `payTo`, and the facilitator settles by calling `transferWithAuthorization`
-directly on the token. The spec is explicit that `to` is "the intended payment recipient — not a
-contract intermediary", precisely so a facilitator cannot redirect funds.
+**Why receive rather than transfer.** The x402 exact-EVM scheme has the client sign
+`TransferWithAuthorization` with `to` set to `payTo`, and states that `to` is "the intended payment
+recipient — not a contract intermediary". Our `payTo` _is_ a contract that must do something
+atomic with the money. With a transfer authorization, anyone may submit it to USDC on its own:
+the funds land in `SlotMarket`, no rental is created, the nonce is spent, and the money is
+stranded. `receiveWithAuthorization` may only be called by `to`, so the pull and the rental happen
+in one call or not at all. x402 assumes `payTo` is a recipient; here it is not, and that is the
+whole difference.
 
-Our design wants the opposite shape, for a good reason. If `payTo` is `SlotMarket` and the
-authorization is a _transfer_, **anyone may submit it to USDC on its own**: the money lands in the
-contract, no rental is created, the nonce is spent, and the funds are stranded. Paying and
-scheduling have to be one atomic act, which is exactly what `receiveWithAuthorization` gives —
-only `to` may call it, so the pull and the rental happen in the same call or not at all.
+**Why one primitive rather than several.** An earlier draft recommended keeping both a receive and
+a transfer path, for maximum reach. Looked at through the audit and the buyer, one is better:
 
-So the instinct behind the phase 1 change is right, and it is the stock x402 flow that is unsafe
-_for this particular use_, because x402 assumes `payTo` is a recipient rather than a contract that
-must do something atomically with the money.
+- **Buyers need only USDC.** The relayer pays gas, so a project paying from a treasury or a fresh
+  wallet does not need ETH on Base first.
+- **Atomic everywhere.** Nothing can be stranded, so there is no orphan-recovery path to write,
+  test or audit.
+- **Roughly half the payment surface.** W18 makes an external audit mandatory, and an audit is
+  scoped by surface area.
+- **No liveness dependency on TopNow.** `rentWithAuthorization` is permissionless — authority comes
+  from the buyer's signature, not the caller — so if the relayer is down, a buyer can submit their
+  own signed authorization and pay their own gas.
 
-Three ways out, and W17 means the choice cannot be deferred — an immutable contract gets one shot
-at having both:
+**The accepted cost.** A stock x402 client signs `TransferWithAuthorization` and cannot pay us.
+Agents use a small client TopNow publishes; see phase 5.5 for how the 402 response says so rather
+than letting a stock client sign the wrong thing.
 
-|                                                                                                                                               | Interoperability                                               | Safety                                                                                                                |
-| --------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| **(a) Spec-compliant only** — `transferWithAuthorization`, contract submits it to USDC itself then creates the rental in the same transaction | Any stock x402 client works                                    | A third party can front-run by submitting the auth to USDC directly; needs an orphan-recovery path for stranded funds |
-| **(b) Receive-only** — `receiveWithAuthorization`, as the phase 1 change asks                                                                 | Stock clients cannot pay; we publish a small client of our own | Atomic by construction. No stranding, no front-run, no recovery path to get wrong                                     |
-| **(c) Both** — `rentWithAuthorization` (receive) and `rentWithTransferAuthorization` (transfer, with recovery)                                | Full                                                           | Two payment paths to test and audit, and the weaker one still exists                                                  |
+A browser wallet signs this exactly as easily as it would sign a permit — it is one EIP-712
+`signTypedData` — so the web flow loses nothing and gains the gasless payment.
 
-**Recommendation: (c), decided now.** The extra surface is real, but it is the only option that does
-not have to be regretted later, and the agent audience is the whole point of phase 5.5. If the
-answer is (b), the phase 5.5 test plan changes — a stock SDK will not be able to pay, so the e2e
-agent client becomes ours.
+### W20. Buyer signatures are `bytes`, so smart wallets can pay
 
-This is the one thing in phase 5.5 that needs an answer before phase 1 is written.
+The buyer's authorization is passed through as `bytes signature`, never as `(v, r, s)`.
+
+Verified against Circle's
+[`FiatTokenV2_2`](https://github.com/circlefin/stablecoin-evm/blob/master/contracts/v2/FiatTokenV2_2.sol),
+which has `bytes memory signature` overloads of `receiveWithAuthorization`,
+`transferWithAuthorization` and `permit` that accept ERC-1271 contract-wallet signatures. The
+`(v, r, s)` form is EOA-only, and Coinbase Smart Wallet users — a large share of Base — cannot
+produce one. An earlier draft of this plan used `(v, r, s)`; it would have turned those buyers away
+at the payment step.
+
+**To verify before phase 2 ships:** that the USDC actually deployed on Base Sepolia and on Base
+mainnet is V2_2. The source being in Circle's repository does not prove what is onchain, and that
+needs the RPC allowlist.
+
+The _quote_ signature is unaffected: it is signed by TopNow's own server key, an EOA, so plain
+`ECDSA` is correct there.
+
+### W21. When a rental counts as confirmed
+
+Base's sequencer gives soft confirmation in about two seconds; L1 finality takes minutes. They
+answer different questions:
+
+- **Showing a rental on the board** waits for sequencer confirmation of a couple of blocks. Fast,
+  and a Base reorg that deep is rare.
+- **The poller reconciles against the finalized head**, so a rental that did get reorged out is
+  corrected rather than left standing.
+- **Anything that moves money afterwards** — W16's fiat refund in particular — waits for finality.
+  Refunding a Stripe payment because a registration that later turns out to have landed looked like
+  it failed is the one mistake here that cannot be quietly corrected.
 
 ### W17. The contract is immutable
 
@@ -267,7 +305,7 @@ Migration is therefore a redeploy, and phase 6 documents it as a procedure rathe
 discovering it under pressure:
 
 1. Deploy v2; grant it no authority over v1.
-2. `setPaused(true)` on v1 — new rentals stop, `claim` keeps working (pausing must never block a
+2. `pause()` on v1 — new rentals stop, `claim` keeps working (pausing must never block a
    refund).
 3. Let v1's remaining rentals run out and settle. The longest possible tail is 24 hours plus the
    queue cap, so 48 hours bounds it.
@@ -365,27 +403,18 @@ struct Quote {             // EIP-712, signed by QUOTE_SIGNER
     uint64  expiry;
 }
 
-function rent(Quote calldata q, bytes calldata sig) external returns (uint256 id);
-function rentWithPermit(Quote calldata q, bytes calldata sig, Permit calldata p)
-    external returns (uint256 id);
-
 // REGISTRAR_ROLE, zero payment. See W11, W13.
 function registerFiat(address renter, uint8 slot, uint16 durationH, bytes32 contentHash)
     external returns (uint256 id);
 
-// Agent booking over x402 (phase 5.5). authNonce == keccak256(abi.encode(q)) binds one
-// authorization to exactly one quote. Which of these two exists is W19.
+// The only way to pay (W19). Web and agents alike; the relayer usually submits it, but it is
+// permissionless — authority is the buyer's signature, not the caller.
+// authNonce == keccak256(abi.encode(q)) binds one authorization to exactly one quote.
 function rentWithAuthorization(
     Quote calldata q, bytes calldata quoteSig,
     uint256 validAfter, uint256 validBefore, bytes32 authNonce,
-    uint8 v, bytes32 r, bytes32 s
+    bytes calldata signature                             // W20: ERC-1271 wallets included
 ) external returns (uint256 id);                         // USDC.receiveWithAuthorization
-
-function rentWithTransferAuthorization(
-    Quote calldata q, bytes calldata quoteSig,
-    uint256 validAfter, uint256 validBefore, bytes32 authNonce,
-    uint8 v, bytes32 r, bytes32 s
-) external returns (uint256 id);                         // USDC.transferWithAuthorization
 
 function settle(uint256 id) external;                    // permissionless, after endsAt
 function settleMany(uint256[] calldata ids) external;    // length-capped
@@ -397,7 +426,8 @@ function withdraw(address to, uint128 amount) external;  // DEFAULT_ADMIN_ROLE
 
 function setQuoteSigner(address next) external;           // DEFAULT_ADMIN_ROLE
 function setMinRate(uint8 slot, uint128 rateHr) external; // DEFAULT_ADMIN_ROLE
-function setPaused(bool paused) external;                 // DEFAULT_ADMIN_ROLE
+function pause() external;                                // PAUSER_ROLE
+function unpause() external;                              // DEFAULT_ADMIN_ROLE only
 
 function freeAt(uint8 slot) external view returns (uint64);
 function rentalOf(uint256 id) external view returns (Rental memory);
@@ -405,7 +435,8 @@ function earnedOf(uint256 id, uint64 at) external view returns (uint128);
 ```
 
 Every state change emits: `Rented`, `FiatRegistered`, `Settled`, `Killed`, `Cancelled`,
-`Claimed`, `Withdrawn`, `QuoteSignerChanged`, `MinRateChanged`, `PausedSet`. Role changes emit
+`Claimed`, `Withdrawn`, `QuoteSignerChanged`, `MinRateChanged`, and `Pausable`'s own
+`Paused` / `Unpaused`. Role changes emit
 `AccessControl`'s own `RoleGranted` / `RoleRevoked`.
 
 W13 splits kill in two. `kill` is for a rental that has not started — a moderator hot key may call
@@ -539,9 +570,14 @@ the Stripe webhook already uses and the same reason it cannot race.
 
 The quote signer becomes a production secret — environment only, never `.env.example`, and named
 in `scripts/check-client-bundle.mjs` so a leak into the browser bundle fails CI. Reorgs mean a
-confirmation threshold before a rental is shown; Base reorgs are shallow but real. An RPC outage
+confirmation threshold before a rental is shown; Base reorgs are shallow but real (W21). An RPC outage
 must never block a board render — the board reads the database mirror, exactly as it reads cached
-avatars rather than fetching them. `approve` is a second transaction, so offer `rentWithPermit`.
+avatars rather than fetching them. The buyer signs one
+`ReceiveWithAuthorization` and never sends a transaction (W19), so there is no `approve` step, and
+the relayer pays gas for every rental — cents on Base. That makes the relayer a griefing target:
+it verifies the quote, the authorization signature and the buyer's USDC balance offchain before
+submitting, and `/api/rent` sits behind the existing GCRA limiter. The relayer key is a hot key
+that can spend only ETH for gas; it holds no role and no USDC.
 Wallet libraries are heavy: lazy-load them, and keep the board itself a server component.
 
 ---
@@ -648,18 +684,25 @@ each carrying base64-encoded JSON.
    `payTo` (the `SlotMarket` address), `maxTimeoutSeconds`, and
    `extra: { name, version, assetTransferMethod: "eip3009" }` — the token's own EIP-712 domain,
    which the spec requires. The signed `Quote` and `quoteSig` ride in **`extensions`**, namespaced,
-   because `extra` is not ours to put things in. The quote's `expiry` is set at or beyond
+   because `extra` is not ours to put things in. The same namespace declares that the payment is a
+   **`ReceiveWithAuthorization`** (W19), not the exact scheme's usual transfer authorization, and
+   links to TopNow's client. The quote's `expiry` is set at or beyond
    `maxTimeoutSeconds`, so an agent that uses the whole window still has a valid quote.
 
-3. The agent signs an **EIP-3009** authorization and retries with `X-PAYMENT`.
+3. The agent signs an EIP-3009 **`ReceiveWithAuthorization`** with `to = payTo` and
+   `nonce = keccak256(abi.encode(quote))`, and retries with `X-PAYMENT`.
 
 4. The server verifies the signature, the amount and the binding, then submits the rental. **TopNow
    is its own facilitator and pays the gas.** It waits for the confirmation threshold from phase 2,
    then answers **200** with `rentalId`, `startsAt`, `endsAt` and `txHash`, and a
    `X-PAYMENT-RESPONSE` header carrying the base64 `SettlementResponse`.
 
-Which authorization the agent signs, and therefore whether a stock x402 client can pay at all, is
-**W19** — open, and blocking phase 1.
+**This is off-spec for the exact scheme, deliberately (W19).** The framing — status code, headers,
+`x402Version: 2`, field names — is spec x402 v2, but a stock client signs a _transfer_
+authorization and cannot pay. It must fail closed, not strand money, so the server rejects a
+`TransferWithAuthorization` payload with **400** and a pointer to the client, before anything is
+submitted. Agents use TopNow's small published client: one EIP-712 signature over a documented
+type, so writing one from scratch is also a short job.
 
 ### Gating
 
@@ -720,8 +763,9 @@ agent is not a different legal category of buyer.
 
 Contract: unit and fuzz for the authorization entry point, including a replayed nonce, a mismatched
 quote, an expired `validBefore` and a wrong `value`. End to end: a scripted agent client driving
-the full 402 → sign → retry → 200 round trip against Base Sepolia. Whether that client is the
-official SDK or ours is W19.
+the full 402 → sign → retry → 200 round trip against Base Sepolia, using TopNow's own client
+(W19). And a stock-client payload — a transfer authorization — is refused with 400 before anything
+is submitted.
 
 ### Later
 
@@ -762,10 +806,8 @@ an event for every state change.
 ## Before phase 1 can start
 
 W11 is confirmed and this branch is cut from
-[#31](https://github.com/meemimos/topnow.live/pull/31). One thing remains:
-
-**Answer W19** — whether the contract accepts a receive authorization, a transfer authorization,
-or both. It changes the phase 1 interface, and W17 means there is no second chance at it.
+[#31](https://github.com/meemimos/topnow.live/pull/31). W19 (one payment primitive) and the pauser
+role in W13 were decided on 2026-09-25. One thing remains:
 
 **Allowlist `foundry.paradigm.xyz` and the GitHub release host.** Without `forge`, phase 1 is
 untestable escrow code, and untested escrow code is not worth writing. The RPC and Basescan hosts
