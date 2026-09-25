@@ -1,0 +1,45 @@
+# Foundry root for TopNow's onchain contracts (docs/WEB3-PLAN.md, phase 0).
+#
+# Libraries: OpenZeppelin comes from npm, pinned in package-lock.json alongside
+# everything else; forge-std is a git submodule because its npm package stopped
+# at a 2022 release that no longer compiles against current tooling.
+
+[profile.default]
+src = "src"
+test = "test"
+script = "script"
+out = "out"
+libs = ["lib"]
+# OpenZeppelin resolves through ../node_modules, outside this root.
+allow_paths = ["../node_modules"]
+
+solc_version = "0.8.37"
+# Pinned rather than left to the compiler default, which moves with each solc
+# release and can run ahead of what Base has activated. Cancun is live on Base
+# and Base Sepolia and is everything OpenZeppelin 5 needs.
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 200
+
+# Never reach the network from a test; forks are opted into explicitly.
+offline = true
+
+[fuzz]
+runs = 1000
+
+[invariant]
+runs = 256
+depth = 64
+fail_on_revert = false
+
+[fmt]
+line_length = 100
+
+# CI turns the fuzzers up: slower, but a single missed counterexample in escrow
+# code is worth more than the minutes.
+[profile.ci.fuzz]
+runs = 10000
+
+[profile.ci.invariant]
+runs = 512
+depth = 128

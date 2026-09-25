@@ -8,3 +8,8 @@ src/generated
 
 # Supplied source documents — kept byte-identical to what was handed over.
 docs/build-prompt.md
+
+# Foundry: a git submodule and build output. forge fmt owns the Solidity.
+contracts/lib
+contracts/out
+contracts/cache

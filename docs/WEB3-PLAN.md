@@ -325,31 +325,43 @@ that.
 
 ## Phase 0 — foundations
 
-**Blocked on the network policy.** The container's proxy currently denies every host this needs:
+**Done on 2026-09-25**, and the toolchain came from somewhere other than planned. The Foundry
+installer host and the compiler host (`binaries.soliditylang.org`) are still blocked, but:
 
-- `foundry.paradigm.xyz` and the GitHub release host — the `forge` binary itself
-- `sepolia.base.org`, `*.g.alchemy.com` — RPC
-- `api-sepolia.basescan.org` — verification and the trust badges
+- **`forge` is published on npm** as `@foundry-rs/forge` with per-platform binaries, so it is a
+  pinned dev dependency like everything else. No installer, and CI needs no Foundry action.
+- **The npm `forge-std` is unusable.** It stopped at 1.1.2 in 2022 and imports `ds-test`, which no
+  longer exists. forge-std is a **git submodule** at v1.16.2 instead; `git clone` from GitHub
+  works through the proxy even though `codeload` and release downloads do not.
+- **OpenZeppelin stays on npm** (5.6.1), reached through `remappings.txt`.
+- **The compiler.** CI lets forge download native solc 0.8.37. Where that host is blocked,
+  `scripts/solcjs-shim.mjs` makes the pinned npm `solc` — the same compiler built to WebAssembly —
+  answer to forge as a native binary. Same compiler version, so the same bytecode; it is only
+  slower.
 
-Nothing onchain can be built until these are allowlisted. Writing `SlotMarket.sol` without being
-able to run `forge test` would mean shipping untested escrow code, which is worse than shipping
-none.
+Proven end to end before anything was committed: a throwaway contract inheriting OpenZeppelin's
+`AccessControl` and `Pausable`, with a fuzz test and an invariant test, passing under both the
+default profile and `FOUNDRY_PROFILE=ci` (10,000 fuzz runs).
 
-**The Solidity libraries do not need an allowlist.** `@openzeppelin/contracts` (5.6.1),
-`forge-std` (1.1.2) and `solc` (0.8.37) are all on npm, which already works here, so they come in
-as dev dependencies and `remappings.txt` points at `node_modules/` rather than at `lib/`. That
-drops `github.com/foundry-rs/*` off the list, pins the libraries in the lockfile alongside
-everything else, and puts them in range of the same dependency tooling as the rest of the repo.
+The RPC hosts (`sepolia.base.org`, `*.g.alchemy.com`) and `api-sepolia.basescan.org` are **still
+blocked**. They are needed from phase 2 and phase 5, not before.
 
 **Create**
 
-- `contracts/` as a Foundry root: `foundry.toml`, `remappings.txt`, `contracts/.gitignore` — no
-  `lib/` and no submodules; libraries resolve through `node_modules/`
-- `.github/workflows/contracts.yml` — `forge fmt --check`, `forge build`, `forge test -vvv`, `forge coverage`
+- `contracts/` as a Foundry root: `foundry.toml` (solc 0.8.37, `evm_version` pinned to cancun,
+  a `ci` profile with deeper fuzzing), `remappings.txt`, `.gitignore`, and `lib/forge-std` as a
+  submodule
+- `scripts/solcjs-shim.mjs` — the compiler fallback above
+- `.github/workflows/contracts.yml` — `forge fmt --check`, `forge build --sizes`,
+  `forge test -vvv` under the `ci` profile, on changes to `contracts/` or the lockfile only.
+  `forge coverage` joins it in phase 1, when there is something to cover.
 
 **Change**
 
-- `README.md` — a contracts section
+- `README.md` — a contracts section, the submodule step in setup, and the `contracts:*` scripts
+- `package.json` — `@foundry-rs/forge`, `@openzeppelin/contracts` and `solc`, exact versions
+- `scripts/check-client-bundle.mjs` — `ALCHEMY_API_KEY` and `BASESCAN_API_KEY` are server-only
+- `.prettierignore`, `eslint.config.mjs` — skip the submodule
 - `.env.example` — `BASE_SEPOLIA_RPC_URL`, `SLOT_MARKET_ADDRESS`, `USDC_ADDRESS`,
   `QUOTE_SIGNER_ADDRESS`, `ALCHEMY_API_KEY`, `BASESCAN_API_KEY`, **all commented out**
 
@@ -805,12 +817,10 @@ an event for every state change.
 
 ## Before phase 1 can start
 
-W11 is confirmed and this branch is cut from
-[#31](https://github.com/meemimos/topnow.live/pull/31). W19 (one payment primitive) and the pauser
-role in W13 were decided on 2026-09-25. One thing remains:
+Nothing. W11 is confirmed, W19 and the pauser role were decided on 2026-09-25, and phase 0 put a
+working `forge test` in place without waiting for the allowlist.
 
-**Allowlist `foundry.paradigm.xyz` and the GitHub release host.** Without `forge`, phase 1 is
-untestable escrow code, and untested escrow code is not worth writing. The RPC and Basescan hosts
-are needed from phase 2 and phase 5 respectively, so they can follow.
-
-The Solidity libraries no longer need an allowlist: they come from npm.
+**Still to allowlist, for later phases:** the Base Sepolia RPC (`*.g.alchemy.com`, or
+`sepolia.base.org`) for phase 2 — and before phase 2 ships, to confirm the deployed USDC is
+FiatTokenV2_2 (W20) — and `api-sepolia.basescan.org` for phase 5. `binaries.soliditylang.org`
+would retire the solcjs shim here but is not required.

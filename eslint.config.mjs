@@ -79,6 +79,8 @@ const eslintConfig = defineConfig([
     "TopNow.html",
     "reference/**",
     "src/generated/**",
+    // forge-std, a git submodule. Not ours to lint.
+    "contracts/lib/**",
   ]),
 ]);
 

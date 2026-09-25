@@ -15,6 +15,8 @@ No cumulative bidding. No permanent number one.
 | `reference/`           | The prototype's DOM and logic, extracted so they can be read and diffed |
 | `docs/build-prompt.md` | The build brief. Authority for scope and pricing                        |
 | `docs/PLAN.md`         | Phase ordering, dependencies, and the resolved decisions                |
+| `docs/WEB3-PLAN.md`    | The onchain slot market: decisions and phases                           |
+| `contracts/`           | Solidity, built and tested with Foundry                                 |
 | `src/`                 | The app                                                                 |
 | `prisma/`              | Schema and migrations                                                   |
 | `e2e/`                 | Playwright specs, run at 360 / 768 / 1280                               |
@@ -36,7 +38,8 @@ its numbers. See `reference/README.md`.
 **Prerequisites:** Node 22+, npm 10+, PostgreSQL 16+.
 
 ```bash
-# 1. Install
+# 1. Install (the submodule is forge-std, for the contract tests)
+git submodule update --init --recursive
 npm install
 
 # 2. Database
@@ -62,22 +65,52 @@ is empty.
 
 ## Scripts
 
-| Command                           | What it does                       |
-| --------------------------------- | ---------------------------------- |
-| `npm run dev`                     | Development server                 |
-| `npm run build` / `npm start`     | Production build and serve         |
-| `npm run typecheck`               | Route typegen, then `tsc --noEmit` |
-| `npm run lint:eslint`             | ESLint                             |
-| `npm run format` / `format:check` | Prettier                           |
-| `npm test`                        | Unit tests (Vitest)                |
-| `npm run test:e2e`                | End-to-end tests (Playwright)      |
-| `npm run db:migrate`              | Create and apply a migration       |
-| `npm run db:deploy`               | Apply migrations (deploy)          |
-| `npm run db:studio`               | Prisma Studio                      |
-| `npm run fidelity`                | Fidelity captures (#5)             |
+| Command                           | What it does                            |
+| --------------------------------- | --------------------------------------- |
+| `npm run dev`                     | Development server                      |
+| `npm run build` / `npm start`     | Production build and serve              |
+| `npm run typecheck`               | Route typegen, then `tsc --noEmit`      |
+| `npm run lint:eslint`             | ESLint                                  |
+| `npm run format` / `format:check` | Prettier                                |
+| `npm test`                        | Unit tests (Vitest)                     |
+| `npm run test:e2e`                | End-to-end tests (Playwright)           |
+| `npm run db:migrate`              | Create and apply a migration            |
+| `npm run db:deploy`               | Apply migrations (deploy)               |
+| `npm run db:studio`               | Prisma Studio                           |
+| `npm run fidelity`                | Fidelity captures (#5)                  |
+| `npm run contracts:build`         | Compile the contracts                   |
+| `npm run contracts:test`          | Contract unit, fuzz and invariant tests |
+| `npm run contracts:fmt`           | Format the Solidity                     |
 
 CI runs format, lint, typecheck, unit tests, build and e2e on every push and pull request,
 plus a secret scan. All of it must be green to merge.
+
+## Contracts
+
+The onchain slot market lives in `contracts/`, a Foundry project. The plan and every decision
+behind it is `docs/WEB3-PLAN.md`. **Testnet only** — Base Sepolia — until legal advice and an
+external audit say otherwise (W18).
+
+`forge` comes from npm, so `npm install` is all the toolchain there is. Run it as
+`npm run forge -- <args>`: a clean install does not link a `forge` binary onto the path. OpenZeppelin is an npm
+dependency too; forge-std is a git submodule, because its npm package stopped at a 2022 release.
+Both are pinned: one in `package-lock.json`, the other by the submodule commit.
+
+```bash
+npm run contracts:test                           # unit, fuzz, invariant
+FOUNDRY_PROFILE=ci npm run contracts:test        # the fuzz and invariant depth CI uses
+```
+
+**If forge cannot download the compiler** — `binaries.soliditylang.org` is blocked in some
+sandboxes — use the solcjs shim. It is the same compiler built to WebAssembly, pinned to the same
+version, so only the speed differs. CI never uses it:
+
+```bash
+FOUNDRY_SOLC="$PWD/scripts/solcjs-shim.mjs" npm run contracts:test
+```
+
+**No private key ever goes in the repository or a `.env` file.** Deployment signs with a
+`cast wallet` keystore or through the Safe, and CI holds no key and never deploys.
 
 ## The admin surface
 

@@ -22,6 +22,8 @@ const SERVER_ONLY_VARS = [
   "CRON_SECRET",
   "ADMIN_PASSWORD_HASH",
   "ADMIN_SESSION_SECRET",
+  "ALCHEMY_API_KEY",
+  "BASESCAN_API_KEY",
 ];
 
 // Shapes that are secrets regardless of which variable carried them.

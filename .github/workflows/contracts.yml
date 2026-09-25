@@ -1,0 +1,67 @@
+name: Contracts
+
+# Separate from CI so a web change does not pay for the fuzzers, and a contract
+# change does not wait on Postgres and Playwright (docs/WEB3-PLAN.md, phase 0).
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "contracts/**"
+      - ".gitmodules"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/contracts.yml"
+  pull_request:
+    paths:
+      - "contracts/**"
+      - ".gitmodules"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/contracts.yml"
+
+concurrency:
+  group: contracts-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  forge:
+    runs-on: ubuntu-latest
+
+    # More fuzz and invariant runs than a local `forge test` (foundry.toml).
+    env:
+      FOUNDRY_PROFILE: ci
+      # Not a database: npm ci runs `prisma generate`, and the Prisma config
+      # refuses to load without a URL. Nothing in this job connects to it.
+      DATABASE_URL: postgresql://unused:unused@127.0.0.1:5432/unused
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # forge and OpenZeppelin are both pinned in package-lock.json. No key is
+      # present in this job and nothing here deploys.
+      #
+      # forge runs as `npm run forge`, not `npx forge`: the launcher package and
+      # its platform binary both claim the `forge` bin name, and a clean install
+      # links neither.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check Solidity formatting
+        run: npm run -s forge -- fmt --check --root contracts
+
+      # The native compiler, downloaded by forge — not the solcjs shim.
+      - name: Build
+        run: npm run -s forge -- build --root contracts --sizes
+
+      - name: Test
+        run: npm run -s forge -- test --root contracts -vvv
